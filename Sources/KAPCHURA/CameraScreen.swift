@@ -450,26 +450,40 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
     func startStopRecording() {
         guard isReady, !recordingBusy else { return }
         recordingBusy = true
-        sessionQueue.async {
-            if self.movieOutput.isRecording {
-                self.movieOutput.stopRecording()
-                return
+
+        if isRecording {
+            sessionQueue.async {
+                if self.movieOutput.isRecording {
+                    self.movieOutput.stopRecording()
+                } else {
+                    Task { @MainActor in self.recordingBusy = false }
+                }
             }
-            guard let connection = self.movieOutput.connection(with: .video),
-                  let device = self.activeDevice else {
+            return
+        }
+
+        guard let connection = movieOutput.connection(with: .video),
+              let device = activeDevice else {
+            recordingBusy = false
+            message = "Video recording connection is unavailable."
+            return
+        }
+        // Configure the connection on the main actor before handing recording
+        // start/stop operations to the serial capture queue.
+        applyStabilization(to: connection, device: device)
+        let output = movieOutput
+        let destination = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("KAPCHURA-\(UUID().uuidString).mov")
+
+        sessionQueue.async {
+            guard !output.isRecording else {
                 Task { @MainActor in
                     self.recordingBusy = false
-                    self.message = "Video recording connection is unavailable."
+                    self.message = "Recorder is already active."
                 }
                 return
             }
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("KAPCHURA-\(UUID().uuidString).mov")
-            if FileManager.default.fileExists(atPath: url.path) {
-                try? FileManager.default.removeItem(at: url)
-            }
-            self.applyStabilization(to: connection, device: device)
-            self.movieOutput.startRecording(to: url, recordingDelegate: self)
+            output.startRecording(to: destination, recordingDelegate: self)
             Task { @MainActor in
                 self.recordingURL = nil
                 self.message = "Starting recording…"
