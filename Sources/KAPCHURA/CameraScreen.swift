@@ -173,11 +173,27 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             let sizeOK = resolution == "Open Gate" || (resolution == "4K" ? (d.width >= 3840 || d.height >= 2160) : (d.width >= 1920 || d.height >= 1080))
             return sizeOK && format.videoSupportedFrameRateRanges.contains { Double(fps) >= $0.minFrameRate && Double(fps) <= $0.maxFrameRate }
         }
-        guard let chosen = candidates.max(by: {
-            let a = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
-            let b = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
-            return Int64(a.width) * Int64(a.height) < Int64(b.width) * Int64(b.height)
-        }) else {
+        let chosenFormat: AVCaptureDevice.Format?
+        if resolution == "Open Gate" {
+            chosenFormat = candidates.max {
+                let a = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
+                let b = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
+                return Int64(a.width) * Int64(a.height) < Int64(b.width) * Int64(b.height)
+            }
+        } else if resolution == "1080p" {
+            chosenFormat = candidates.min {
+                let a = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
+                let b = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
+                return abs(Int(a.width * a.height) - 1920 * 1080) < abs(Int(b.width * b.height) - 1920 * 1080)
+            }
+        } else {
+            chosenFormat = candidates.max {
+                let a = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
+                let b = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
+                return Int64(a.width) * Int64(a.height) < Int64(b.width) * Int64(b.height)
+            }
+        }
+        guard let chosen = chosenFormat else {
             Task { @MainActor in self.message = "\(resolution) at \(fps) FPS is unavailable on this lens." }
             return
         }
@@ -246,6 +262,7 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             try device.lockForConfiguration()
             device.setExposureModeCustom(duration: device.exposureDuration, iso: bounded, completionHandler: nil)
             isoAutomatic = false
+            shutterAutomatic = false
             device.unlockForConfiguration()
             iso = Double(bounded)
         } catch { message = "ISO change failed." }
@@ -261,6 +278,7 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             try device.lockForConfiguration()
             device.setExposureModeCustom(duration: CMTime(seconds: bounded, preferredTimescale: 1_000_000),
                                          iso: safeISO, completionHandler: nil)
+            isoAutomatic = false
             shutterAutomatic = false
             device.unlockForConfiguration()
             shutter = bounded
