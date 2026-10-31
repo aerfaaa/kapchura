@@ -464,7 +464,7 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
                 return
             }
             let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("KAPCHURA-\\(UUID().uuidString).mov")
+                .appendingPathComponent("KAPCHURA-\(UUID().uuidString).mov")
             if FileManager.default.fileExists(atPath: url.path) {
                 try? FileManager.default.removeItem(at: url)
             }
@@ -483,7 +483,7 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
         Task { @MainActor in
             self.isRecording = true
             self.recordingBusy = false
-            self.message = "Recording · \\(self.profileStatus)"
+            self.message = "Recording · \(self.profileStatus)"
         }
     }
 
@@ -498,11 +498,11 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             let nsError = error as NSError?
             let finishedSuccessfully = nsError?.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool == true
             guard fileExists else {
-                self.message = error.map { "Recording failed: \\( $0.localizedDescription)" } ?? "Recording ended without a video file."
+                self.message = error.map { "Recording failed: \( $0.localizedDescription)" } ?? "Recording ended without a video file."
                 return
             }
             if let error, !finishedSuccessfully {
-                self.message = "Recording ended with an error; attempting to keep the video. \\(error.localizedDescription)"
+                self.message = "Recording ended with an error; attempting to keep the video. \(error.localizedDescription)"
             }
             self.recordingURL = outputFileURL
             PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
@@ -759,7 +759,7 @@ struct CameraScreen: View {
                 }.pickerStyle(.segmented).disabled(camera.isRecording)
                 HStack(spacing: 3) {
                     Picker("FPS", selection: Binding(get: { camera.frameRate }, set: { camera.setFrameRate($0) })) {
-                        ForEach(camera.supportedFrameRates, id: \\.self) { Text("\\($0)").tag($0) }
+                        ForEach(camera.supportedFrameRates, id: \.self) { Text("\($0)").tag($0) }
                     }.pickerStyle(.segmented).disabled(camera.isRecording)
                     Picker("Stabilisation", selection: Binding(get: { camera.stabilization }, set: { camera.setStabilization($0) })) {
                         Text("OFF").tag("Off")
