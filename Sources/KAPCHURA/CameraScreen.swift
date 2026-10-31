@@ -539,12 +539,14 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
 
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
+    let stabilization: String
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
         view.backgroundColor = .black
         view.previewLayer.session = session
         view.previewLayer.videoGravity = .resizeAspectFill
+        applyPreviewStabilization(view.previewLayer.connection)
         return view
     }
 
@@ -553,6 +555,16 @@ struct CameraPreview: UIViewRepresentable {
             uiView.previewLayer.session = session
         }
         uiView.previewLayer.videoGravity = .resizeAspectFill
+        applyPreviewStabilization(uiView.previewLayer.connection)
+    }
+
+    private func applyPreviewStabilization(_ connection: AVCaptureConnection?) {
+        guard let connection, connection.isVideoStabilizationSupported else { return }
+        switch stabilization {
+        case "Minimal": connection.preferredVideoStabilizationMode = .standard
+        case "Maximum": connection.preferredVideoStabilizationMode = .cinematic
+        default: connection.preferredVideoStabilizationMode = .off
+        }
     }
 }
 
@@ -568,7 +580,7 @@ struct CameraScreen: View {
         GeometryReader { geometry in
             ZStack {
                 Color.black
-                CameraPreview(session: camera.session)
+                CameraPreview(session: camera.session, stabilization: camera.stabilization)
                     .frame(width: geometry.size.width, height: geometry.size.height)
                     .clipped()
 
@@ -595,6 +607,8 @@ struct CameraScreen: View {
                     }
                 }
                 .padding(.horizontal, geometry.size.width > geometry.size.height ? 6 : 14)
+                .padding(.leading, geometry.size.width > geometry.size.height ? max(geometry.safeAreaInsets.leading, 34) : 0)
+                .padding(.trailing, geometry.size.width > geometry.size.height ? max(geometry.safeAreaInsets.trailing, 34) : 0)
                 .padding(.bottom, 0)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
