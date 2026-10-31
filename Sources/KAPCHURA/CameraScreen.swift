@@ -131,8 +131,10 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
                     self.applyCaptureProfile(resolution: self.resolution, fps: self.frameRate, to: target)
                     self.session.commitConfiguration()
                     let rawCount = self.photoOutput.availableRawPhotoPixelFormatTypes.count
+                    let availableRates = self.frameRates(for: target, resolution: self.resolution)
                     Task { @MainActor in
                         self.isTelephoto = telephoto
+                        self.supportedFrameRates = availableRates
                         self.lensLabel = telephoto ? "2× TELE" : "1× WIDE"
                         self.rawPixelFormatCount = rawCount
                         self.rawStillAvailable = rawCount > 0
@@ -185,6 +187,14 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
                 let a = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
                 let b = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
                 return abs(Int(a.width * a.height) - 1920 * 1080) < abs(Int(b.width * b.height) - 1920 * 1080)
+            }
+        } else if resolution == "4K" {
+            chosenFormat = candidates.min {
+                let a = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
+                let b = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
+                let scoreA = abs(log((Double(a.width) * Double(a.height)) / (3840.0 * 2160.0))) + abs(Double(a.width) / Double(a.height) - 16.0 / 9.0) * 2
+                let scoreB = abs(log((Double(b.width) * Double(b.height)) / (3840.0 * 2160.0))) + abs(Double(b.width) / Double(b.height) - 16.0 / 9.0) * 2
+                return scoreA < scoreB
             }
         } else {
             chosenFormat = candidates.max {
