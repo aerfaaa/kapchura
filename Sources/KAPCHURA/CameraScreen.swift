@@ -598,17 +598,22 @@ struct CameraScreen: View {
 
                 VStack(spacing: 0) {
                     topBar
+                        .padding(.horizontal, 14)
                         .padding(.top, geometry.size.width > geometry.size.height ? 4 : max(geometry.safeAreaInsets.top, 8) + 5)
                     Spacer(minLength: 4)
                     if geometry.size.width > geometry.size.height {
-                        landscapeDock.frame(maxHeight: min(geometry.size.height * 0.48, 148))
+                        landscapeDock
+                            .frame(maxWidth: .infinity)
+                            .frame(maxHeight: min(geometry.size.height * 0.48, 148))
+                            .padding(.leading, max(geometry.safeAreaInsets.leading, 34))
+                            .padding(.trailing, max(geometry.safeAreaInsets.trailing, 34))
                     } else {
-                        bottomPanel.frame(maxHeight: geometry.size.height * 0.68)
+                        bottomPanel
+                            .frame(maxWidth: .infinity)
+                            .frame(maxHeight: geometry.size.height * 0.68)
                     }
                 }
-                .padding(.horizontal, geometry.size.width > geometry.size.height ? 6 : 14)
-                .padding(.leading, geometry.size.width > geometry.size.height ? max(geometry.safeAreaInsets.leading, 34) : 0)
-                .padding(.trailing, geometry.size.width > geometry.size.height ? max(geometry.safeAreaInsets.trailing, 34) : 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .padding(.bottom, 0)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
@@ -771,8 +776,8 @@ struct CameraScreen: View {
         .padding(.top, 9)
         .padding(.bottom, 28)
         .background {
-            Rectangle().fill(.ultraThinMaterial)
-                .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.18)).frame(height: 0.6) }
+            Rectangle().fill(Color.black.opacity(0.96))
+                .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.16)).frame(height: 0.6) }
                 .ignoresSafeArea(edges: .bottom)
         }
     }
@@ -809,8 +814,8 @@ struct CameraScreen: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background {
-            Rectangle().fill(.ultraThinMaterial)
-                .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.18)).frame(height: 0.6) }
+            Rectangle().fill(Color.black.opacity(0.96))
+                .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.16)).frame(height: 0.6) }
                 .ignoresSafeArea(edges: .bottom)
         }
     }
