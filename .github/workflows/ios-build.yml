@@ -1,18 +1,21 @@
-```yaml
-name: iOS Build
 
-on:
+name: "iOS Build"
+
+"on":
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -38,4 +41,3 @@ jobs:
           path: build/Build/Products/Debug-iphoneos/KAPCHURA.app
           if-no-files-found: error
           retention-days: 7
-```
