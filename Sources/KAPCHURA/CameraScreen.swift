@@ -312,14 +312,20 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
 
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
+
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
+        view.backgroundColor = .black
         view.previewLayer.session = session
-        view.previewLayer.videoGravity = .resizeAspect
+        view.previewLayer.videoGravity = .resizeAspectFill
         return view
     }
+
     func updateUIView(_ uiView: PreviewView, context: Context) {
-        uiView.previewLayer.session = session
+        if uiView.previewLayer.session !== session {
+            uiView.previewLayer.session = session
+        }
+        uiView.previewLayer.videoGravity = .resizeAspectFill
     }
 }
 
@@ -332,119 +338,235 @@ struct CameraScreen: View {
     @StateObject private var camera = CameraEngine()
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            VStack(spacing: 14) {
-                header
+        GeometryReader { geometry in
+            ZStack {
+                Color.black
                 CameraPreview(session: camera.session)
-                    .aspectRatio(4.0 / 3.0, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(alignment: .topLeading) {
-                        Text(camera.lensLabel)
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .padding(8).background(.black.opacity(0.65), in: Capsule()).padding(12)
-                    }
-                lensControls
-                focusModeControls
-                controls
-                HStack(spacing: 24) {
-                    Button { camera.captureRAWPhoto() } label: {
-                        Label("RAW PHOTO", systemImage: "camera")
-                    }
-                    .disabled(!camera.isReady || !camera.rawStillAvailable || camera.isRecording)
-                    recordButton
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .clipped()
+
+                // A subtle readability gradient; the live image remains the main surface.
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.black.opacity(0.62), .clear],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: 170)
+                    Spacer(minLength: 0)
+                    LinearGradient(colors: [.clear, .black.opacity(0.28), .black.opacity(0.88)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: 310)
                 }
-                Text(camera.message)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.65))
-                    .lineLimit(3).multilineTextAlignment(.center)
+                .ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    topBar
+                        .padding(.top, max(geometry.safeAreaInsets.top, 8) + 5)
+                    Spacer(minLength: 12)
+                    bottomPanel
+                        .padding(.bottom, max(geometry.safeAreaInsets.bottom, 8) + 8)
+                }
+                .padding(.horizontal, 20)
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .background(.black)
+            .ignoresSafeArea()
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var topBar: some View {
+        HStack(alignment: .center, spacing: 14) {
+            Button {
+                camera.switchLens(telephoto: false)
+            } label: {
+                lensPill("1×", selected: !camera.isTelephoto)
+            }
+            .disabled(!camera.isReady)
+
+            Button {
+                camera.switchLens(telephoto: true)
+            } label: {
+                lensPill("2×", selected: camera.isTelephoto)
+            }
+            .disabled(!camera.isReady)
+
+            Spacer()
+
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(camera.isRecording ? Color.red : Color.white.opacity(0.45))
+                    .frame(width: 6, height: 6)
+                Text(camera.isRecording ? "REC" : "STANDBY")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(1.2)
+            }
+            .foregroundStyle(.white.opacity(0.9))
+
+            Text(camera.rawStillAvailable ? "RAW" : "HEVC")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .tracking(0.8)
+                .foregroundStyle(camera.rawStillAvailable ? .white : .white.opacity(0.65))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(.black.opacity(0.38), in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(0.25), lineWidth: 0.7))
+        }
+    }
+
+    private func lensPill(_ title: String, selected: Bool) -> some View {
+        Text(title)
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .foregroundStyle(selected ? .black : .white)
+            .frame(width: 42, height: 34)
+            .background(selected ? Color.white : Color.black.opacity(0.38), in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(selected ? 0 : 0.35), lineWidth: 0.7))
+    }
+
+    private var bottomPanel: some View {
+        VStack(spacing: 15) {
+            HStack(spacing: 10) {
+                Button("AUTO") { camera.setAutofocus() }
+                    .foregroundStyle(!camera.isManualFocus ? .black : .white)
+                    .background(!camera.isManualFocus ? Color.white : Color.white.opacity(0.12), in: Capsule())
+                Button("MF") { camera.enableManualFocus() }
+                    .foregroundStyle(camera.isManualFocus ? .black : .white)
+                    .background(camera.isManualFocus ? Color.white : Color.white.opacity(0.12), in: Capsule())
+                Spacer()
+                Text(camera.lensLabel)
+                    .foregroundStyle(.white.opacity(0.75))
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .tracking(1)
+                if camera.rawStillAvailable {
+                    Text("RAW STILL READY")
+                        .foregroundStyle(.white.opacity(0.6))
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                }
+            }
+            .font(.system(size: 10, weight: .bold, design: .monospaced))
+            .buttonStyle(.plain)
+            .padding(.bottom, 2)
+
+            VStack(spacing: 8) {
+                sliderRow("ISO", value: $camera.iso, range: 25...1600,
+                          valueText: "(Int(camera.iso))") { camera.setISO($0) }
+                sliderRow("SHUTTER", value: $camera.shutter, range: 1.0/1000...1.0/15,
+                          valueText: "1/(Int(1 / max(camera.shutter, 0.0001)))") { camera.setShutter($0) }
+                if camera.isManualFocus {
+                    sliderRow("FOCUS", value: $camera.focus, range: 0...1,
+                              valueText: String(format: "%.2f", camera.focus)) { camera.setManualFocus(Float($0)) }
+                }
+                sliderRow("WB", value: $camera.temperature, range: 2500...8000,
+                          valueText: "(Int(camera.temperature))K") { camera.setWhiteBalance($0) }
+            }
+
+            HStack(alignment: .center) {
+                Button {
+                    camera.captureRAWPhoto()
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: "camera")
+                            .font(.system(size: 19, weight: .regular))
+                        Text("RAW")
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .tracking(1)
+                    }
+                    .foregroundStyle(camera.rawStillAvailable ? .white : .white.opacity(0.35))
+                    .frame(width: 58, height: 58)
+                }
+                .disabled(!camera.isReady || !camera.rawStillAvailable || camera.isRecording)
+
+                Spacer()
+
+                recordButton
+
+                Spacer()
+
                 if let url = camera.recordingURL {
                     ShareLink(item: url) {
-                        Label("Export last recording", systemImage: "square.and.arrow.up")
-                            .font(.system(size: 13, weight: .medium))
+                        VStack(spacing: 4) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 18))
+                            Text("EXPORT")
+                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                .tracking(1)
+                        }
+                        .foregroundStyle(.white)
+                        .frame(width: 58, height: 58)
                     }
+                } else {
+                    VStack(spacing: 4) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 18))
+                        Text("EXPORT")
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .tracking(1)
+                    }
+                    .foregroundStyle(.white.opacity(0.25))
+                    .frame(width: 58, height: 58)
                 }
-                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 16).padding(.top, 8)
-        }
-    }
+            .padding(.top, 2)
 
-    private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("KAPCHURA").font(.system(size: 22, weight: .black, design: .rounded)).tracking(2)
-                Text("COMPUTATIONAL IMAGING").font(.system(size: 8, weight: .medium, design: .monospaced)).tracking(2)
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-            Spacer()
-            Text("REC").font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(camera.isRecording ? .red : .white.opacity(0.3))
-        }.foregroundStyle(.white)
-    }
-
-    private var lensControls: some View {
-        HStack(spacing: 12) {
-            Button("1× WIDE") { camera.switchLens(telephoto: false) }
-                .disabled(!camera.isReady)
-            Button("2× TELE") { camera.switchLens(telephoto: true) }
-                .disabled(!camera.isReady)
-            Spacer()
-            Text(camera.rawStillAvailable ? "RAW ✓" : "RAW —")
-                .foregroundStyle(camera.rawStillAvailable ? .green : .orange)
+            Text(camera.message)
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.68))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
         }
-        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-        .buttonStyle(.bordered).tint(.white)
-    }
-
-    private var focusModeControls: some View {
-        HStack {
-            Text("FOCUS MODE").foregroundStyle(.white.opacity(0.55))
-            Spacer()
-            Button("AUTO") { camera.setAutofocus() }
-                .tint(camera.isManualFocus ? .white : .green)
-            Button("MANUAL") { camera.enableManualFocus() }
-                .tint(camera.isManualFocus ? .green : .white)
+        .padding(.horizontal, 16)
+        .padding(.top, 17)
+        .padding(.bottom, 14)
+        .background {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .environment(\.colorScheme, .dark)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(.white.opacity(0.16), lineWidth: 0.8)
+                }
         }
-        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-        .buttonStyle(.bordered)
-    }
-
-    private var controls: some View {
-        VStack(spacing: 10) {
-            sliderRow("ISO", value: $camera.iso, range: 25...1600, valueText: "\(Int(camera.iso))") { camera.setISO($0) }
-            sliderRow("SHUTTER", value: $camera.shutter, range: 1.0/1000...1.0/15,
-                      valueText: "1/\(Int(1 / max(camera.shutter, 0.0001)))") { camera.setShutter($0) }
-            if camera.isManualFocus {
-                sliderRow("FOCUS", value: $camera.focus, range: 0...1,
-                          valueText: String(format: "%.2f", camera.focus)) { camera.setManualFocus(Float($0)) }
-            }
-            sliderRow("WB", value: $camera.temperature, range: 2500...8000,
-                      valueText: "\(Int(camera.temperature))K") { camera.setWhiteBalance($0) }
-        }
-        .font(.system(size: 11, design: .monospaced))
     }
 
     private func sliderRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>,
                            valueText: String, changed: @escaping (Double) -> Void) -> some View {
-        HStack(spacing: 8) {
-            Text(title).frame(width: 62, alignment: .leading).foregroundStyle(.white.opacity(0.65))
+        HStack(spacing: 9) {
+            Text(title)
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .tracking(0.8)
+                .foregroundStyle(.white.opacity(0.7))
+                .frame(width: 58, alignment: .leading)
             Slider(value: value, in: range) { editing in
                 if !editing { changed(value.wrappedValue) }
             }
-            Text(valueText).frame(width: 65, alignment: .trailing).foregroundStyle(.white)
-        }.tint(.white)
+            .tint(.white)
+            Text(valueText)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white)
+                .frame(width: 55, alignment: .trailing)
+                .contentTransition(.numericText())
+        }
+        .frame(height: 25)
     }
 
     private var recordButton: some View {
-        Button { camera.startStopRecording() } label: {
+        Button {
+            camera.startStopRecording()
+        } label: {
             ZStack {
-                Circle().stroke(.white.opacity(0.8), lineWidth: 2).frame(width: 62, height: 62)
-                Circle().fill(camera.isRecording ? .red : .white)
-                    .frame(width: camera.isRecording ? 24 : 48, height: camera.isRecording ? 24 : 48)
-                    .clipShape(RoundedRectangle(cornerRadius: camera.isRecording ? 5 : 30))
+                Circle()
+                    .stroke(.white.opacity(0.95), lineWidth: 2)
+                    .frame(width: 68, height: 68)
+                RoundedRectangle(cornerRadius: camera.isRecording ? 5 : 30)
+                    .fill(.red)
+                    .frame(width: camera.isRecording ? 25 : 54,
+                           height: camera.isRecording ? 25 : 54)
+                    .animation(.easeInOut(duration: 0.18), value: camera.isRecording)
             }
+            .frame(width: 72, height: 72)
+            .contentShape(Circle())
         }
-        .disabled(!camera.isReady).padding(.top, 2)
+        .buttonStyle(.plain)
+        .disabled(!camera.isReady)
+        .opacity(camera.isReady ? 1 : 0.45)
     }
 }
