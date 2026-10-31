@@ -27,6 +27,8 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
     @Published var shutterAutomatic = true
     @Published var focusAutomatic = true
     @Published var whiteBalanceAutomatic = true
+    @Published var supportedFrameRates: [Int] = [24]
+    @Published var profileStatus = "1080p · 24 FPS"
 
     let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "com.aerfaaa.kapchura.session")
@@ -55,7 +57,7 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
     private func configureSession() {
         sessionQueue.async {
             self.session.beginConfiguration()
-            self.session.sessionPreset = .high
+            self.session.sessionPreset = .inputPriority
             let discovery = AVCaptureDevice.DiscoverySession(
                 deviceTypes: [.builtInWideAngleCamera, .builtInTelephotoCamera],
                 mediaType: .video,
@@ -72,6 +74,7 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             }
             self.session.addInput(input)
             self.activeDevice = device
+            self.applyCaptureProfile(resolution: self.resolution, fps: self.frameRate, to: device)
 
             if let mic = AVCaptureDevice.default(for: .audio),
                let audioInput = try? AVCaptureDeviceInput(device: mic),
@@ -88,7 +91,9 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             }
             self.session.commitConfiguration()
             self.session.startRunning()
+            let rates = self.frameRates(for: device, resolution: self.resolution)
             Task { @MainActor in
+                self.supportedFrameRates = rates
                 self.rawPixelFormatCount = rawTypes.count
                 self.rawStillAvailable = !rawTypes.isEmpty
                 self.availableFormats = Array(Set(formats)).sorted()
@@ -123,6 +128,7 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
                 if self.session.canAddInput(newInput) {
                     self.session.addInput(newInput)
                     self.activeDevice = target
+                    self.applyCaptureProfile(resolution: self.resolution, fps: self.frameRate, to: target)
                     self.session.commitConfiguration()
                     let rawCount = self.photoOutput.availableRawPhotoPixelFormatTypes.count
                     Task { @MainActor in
@@ -142,6 +148,83 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             } catch {
                 Task { @MainActor in self.message = "Lens switch failed: \(error.localizedDescription)" }
             }
+        }
+    }
+
+    private func frameRates(for device: AVCaptureDevice, resolution: String) -> [Int] {
+        let formats = device.formats.filter { format in
+            let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            if resolution == "4K" { return d.width >= 3840 || d.height >= 2160 }
+            if resolution == "1080p" { return d.width >= 1920 || d.height >= 1080 }
+            return true
+        }
+        let cap = resolution == "1080p" ? 30 : 24
+        let rates = Set(formats.flatMap { format in
+            format.videoSupportedFrameRateRanges.flatMap { range in
+                [24, 25, 30].filter { $0 <= cap && Double($0) >= range.minFrameRate && Double($0) <= range.maxFrameRate }
+            }
+        })
+        return rates.sorted()
+    }
+
+    private func applyCaptureProfile(resolution: String, fps: Int, to device: AVCaptureDevice) {
+        let candidates = device.formats.filter { format in
+            let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            let sizeOK = resolution == "Open Gate" || (resolution == "4K" ? (d.width >= 3840 || d.height >= 2160) : (d.width >= 1920 || d.height >= 1080))
+            return sizeOK && format.videoSupportedFrameRateRanges.contains { Double(fps) >= $0.minFrameRate && Double(fps) <= $0.maxFrameRate }
+        }
+        guard let chosen = candidates.max(by: {
+            let a = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
+            let b = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
+            return Int64(a.width) * Int64(a.height) < Int64(b.width) * Int64(b.height)
+        }) else {
+            Task { @MainActor in self.message = "\(resolution) at \(fps) FPS is unavailable on this lens." }
+            return
+        }
+        do {
+            try device.lockForConfiguration()
+            device.activeFormat = chosen
+            let duration = CMTime(value: 1, timescale: CMTimeScale(fps))
+            device.activeVideoMinFrameDuration = duration
+            device.activeVideoMaxFrameDuration = duration
+            device.unlockForConfiguration()
+            let d = CMVideoFormatDescriptionGetDimensions(chosen.formatDescription)
+            Task { @MainActor in
+                self.profileStatus = "\(d.width)×\(d.height) · \(fps) FPS"
+                self.message = "Capture profile: \(self.profileStatus)"
+            }
+        } catch {
+            Task { @MainActor in self.message = "Could not apply format: \(error.localizedDescription)" }
+        }
+    }
+
+    func setResolution(_ value: String) {
+        guard !isRecording, let device = activeDevice else { message = "Stop recording before changing resolution."; return }
+        let rates = frameRates(for: device, resolution: value)
+        guard !rates.isEmpty else { message = "\(value) is unavailable on this lens."; return }
+        let preferred = value == "1080p" ? 30 : 24
+        let fps = rates.contains(preferred) ? preferred : (rates.last ?? 24)
+        resolution = value
+        frameRate = fps
+        supportedFrameRates = rates
+        applyCaptureProfile(resolution: value, fps: fps, to: device)
+    }
+
+    func setFrameRate(_ value: Int) {
+        guard !isRecording, let device = activeDevice else { message = "Stop recording before changing FPS."; return }
+        guard supportedFrameRates.contains(value) else { message = "\(value) FPS is unavailable."; return }
+        frameRate = value
+        applyCaptureProfile(resolution: resolution, fps: value, to: device)
+    }
+
+    func setStabilization(_ value: String) {
+        stabilization = value
+        guard let connection = movieOutput.connection(with: .video) else { return }
+        guard connection.isVideoStabilizationSupported else { message = "Stabilization unavailable for this format."; return }
+        switch value {
+        case "Minimal": connection.preferredVideoStabilizationMode = .standard
+        case "Maximum": connection.preferredVideoStabilizationMode = .cinematic
+        default: connection.preferredVideoStabilizationMode = .off
         }
     }
 
@@ -314,9 +397,17 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             let url = documents.appendingPathComponent("KAPCHURA-\(Int(Date().timeIntervalSince1970)).mov")
             try? FileManager.default.removeItem(at: url)
+            guard let connection = movieOutput.connection(with: .video) else { message = "Video connection unavailable."; return }
+            if connection.isVideoStabilizationSupported {
+                switch stabilization {
+                case "Minimal": connection.preferredVideoStabilizationMode = .standard
+                case "Maximum": connection.preferredVideoStabilizationMode = .cinematic
+                default: connection.preferredVideoStabilizationMode = .off
+                }
+            }
             movieOutput.startRecording(to: url, recordingDelegate: self)
-            isRecording = true
-            message = "Recording…"
+            isRecording = movieOutput.isRecording
+            message = isRecording ? "Recording · \(profileStatus)" : "Could not start recording."
         }
     }
 
@@ -328,6 +419,10 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             self.isRecording = false
             if let error {
                 self.message = "Recording failed: \(error.localizedDescription)"
+                return
+            }
+            guard FileManager.default.fileExists(atPath: outputFileURL.path) else {
+                self.message = "Recording ended without a video file."
                 return
             }
             self.recordingURL = outputFileURL
@@ -401,6 +496,7 @@ struct CameraScreen: View {
                         .padding(.top, max(geometry.safeAreaInsets.top, 8) + 5)
                     Spacer(minLength: 12)
                     bottomPanel
+                        .frame(maxHeight: geometry.size.height * (geometry.size.width > geometry.size.height ? 0.82 : 0.72))
                         .padding(.bottom, max(geometry.safeAreaInsets.bottom, 8) + 8)
                 }
                 .padding(.horizontal, 20)
@@ -461,8 +557,18 @@ struct CameraScreen: View {
     }
 
     private var bottomPanel: some View {
-        VStack(spacing: 15) {
+        ScrollView(.vertical) {
+        VStack(spacing: 12) {
             HStack(spacing: 10) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { camera.settingsCollapsed.toggle() }
+                } label: {
+                    Image(systemName: camera.settingsCollapsed ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(.white.opacity(0.12), in: Circle())
+                }
                 Button("AUTO") { camera.setAutofocus() }
                     .foregroundStyle(!camera.isManualFocus ? .black : .white)
                     .background(!camera.isManualFocus ? Color.white : Color.white.opacity(0.12), in: Capsule())
@@ -484,17 +590,14 @@ struct CameraScreen: View {
             .buttonStyle(.plain)
             .padding(.bottom, 2)
 
-            VStack(spacing: 8) {
-                sliderRow("ISO", value: $camera.iso, range: 25...1600,
-                          valueText: "(Int(camera.iso))") { camera.setISO($0) }
-                sliderRow("SHUTTER", value: $camera.shutter, range: 1.0/1000...1.0/15,
-                          valueText: "1/(Int(1 / max(camera.shutter, 0.0001)))") { camera.setShutter($0) }
-                if camera.isManualFocus {
-                    sliderRow("FOCUS", value: $camera.focus, range: 0...1,
-                              valueText: String(format: "%.2f", camera.focus)) { camera.setManualFocus(Float($0)) }
+            if !camera.settingsCollapsed {
+                VStack(spacing: 7) {
+                    profilePickerRow
+                    sliderRow("ISO", value: $camera.iso, range: 25...1600, valueText: String(Int(camera.iso)), automatic: camera.isoAutomatic, autoAction: { camera.setExposureAutomatic() }) { camera.setISO($0) }
+                    sliderRow("SHUTTER", value: $camera.shutter, range: 1.0/1000...1.0/15, valueText: "1/\(Int(1 / max(camera.shutter, 0.0001)))", automatic: camera.shutterAutomatic, autoAction: { camera.setExposureAutomatic() }) { camera.setShutter($0) }
+                    sliderRow("FOCUS", value: $camera.focus, range: 0...1, valueText: String(format: "%.2f", camera.focus), automatic: camera.focusAutomatic, autoAction: { camera.setAutofocus() }) { camera.setManualFocus(Float($0)) }
+                    sliderRow("WB", value: $camera.temperature, range: 2500...8000, valueText: "\(Int(camera.temperature))K", automatic: camera.whiteBalanceAutomatic, autoAction: { camera.setWhiteBalanceAutomatic() }) { camera.setWhiteBalance($0) }
                 }
-                sliderRow("WB", value: $camera.temperature, range: 2500...8000,
-                          valueText: "(Int(camera.temperature))K") { camera.setWhiteBalance($0) }
             }
 
             HStack(alignment: .center) {
@@ -552,9 +655,11 @@ struct CameraScreen: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
         }
+        }
+        .scrollIndicators(.hidden)
         .padding(.horizontal, 16)
-        .padding(.top, 17)
-        .padding(.bottom, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 12)
         .background {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(.ultraThinMaterial)
@@ -566,8 +671,34 @@ struct CameraScreen: View {
         }
     }
 
+    private var profilePickerRow: some View {
+        VStack(spacing: 7) {
+            HStack(spacing: 7) {
+                Text("FORMAT").font(.system(size: 9, weight: .semibold, design: .monospaced)).foregroundStyle(.white.opacity(0.65)).frame(width: 58, alignment: .leading)
+                Picker("Resolution", selection: Binding(get: { camera.resolution }, set: { camera.setResolution($0) })) {
+                    Text("1080p").tag("1080p")
+                    Text("4K").tag("4K")
+                    Text("OPEN GATE").tag("Open Gate")
+                }.pickerStyle(.segmented).disabled(camera.isRecording)
+            }
+            HStack(spacing: 7) {
+                Text("FPS").font(.system(size: 9, weight: .semibold, design: .monospaced)).foregroundStyle(.white.opacity(0.65)).frame(width: 58, alignment: .leading)
+                Picker("FPS", selection: Binding(get: { camera.frameRate }, set: { camera.setFrameRate($0) })) {
+                    ForEach(camera.supportedFrameRates, id: \.self) { Text("\($0)").tag($0) }
+                }.pickerStyle(.segmented).disabled(camera.isRecording || camera.supportedFrameRates.isEmpty)
+                Text("STAB").font(.system(size: 9, weight: .semibold, design: .monospaced)).foregroundStyle(.white.opacity(0.65))
+                Picker("Stabilization", selection: Binding(get: { camera.stabilization }, set: { camera.setStabilization($0) })) {
+                    Text("OFF").tag("Off")
+                    Text("MIN").tag("Minimal")
+                    Text("MAX").tag("Maximum")
+                }.pickerStyle(.menu).tint(.white).disabled(camera.isRecording)
+            }
+        }
+    }
+
     private func sliderRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>,
-                           valueText: String, changed: @escaping (Double) -> Void) -> some View {
+                           valueText: String, automatic: Bool, autoAction: @escaping () -> Void,
+                           changed: @escaping (Double) -> Void) -> some View {
         HStack(spacing: 9) {
             Text(title)
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
@@ -582,13 +713,15 @@ struct CameraScreen: View {
                 }
             ), in: range)
             .tint(.white)
-            Text(valueText)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white)
-                .frame(width: 55, alignment: .trailing)
-                .contentTransition(.numericText())
+            Text(valueText).font(.system(size: 9, weight: .medium, design: .monospaced)).foregroundStyle(.white).frame(width: 45, alignment: .trailing)
+            Button("A", action: autoAction)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(automatic ? .black : .white)
+                .frame(width: 22, height: 22)
+                .background(automatic ? Color.white : Color.white.opacity(0.12), in: Circle())
+                .buttonStyle(.plain)
         }
-        .frame(height: 25)
+        .frame(height: 26)
     }
 
     private var recordButton: some View {
