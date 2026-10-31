@@ -169,39 +169,26 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
         return rates.sorted()
     }
 
+    private func formatScore(_ format: AVCaptureDevice.Format, resolution: String) -> Double {
+        let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+        let width = Double(dimensions.width)
+        let height = Double(dimensions.height)
+        let area = width * height
+        let aspect = width / max(height, 1)
+        if resolution == "Open Gate" { return -area }
+        let targetArea = resolution == "4K" ? 3840.0 * 2160.0 : 1920.0 * 1080.0
+        let targetAspect = 16.0 / 9.0
+        return abs(log(max(area, 1) / targetArea)) + abs(aspect - targetAspect) * 2.0
+    }
+
     private func applyCaptureProfile(resolution: String, fps: Int, to device: AVCaptureDevice) {
         let candidates = device.formats.filter { format in
             let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
             let sizeOK = resolution == "Open Gate" || (resolution == "4K" ? (d.width >= 3840 || d.height >= 2160) : (d.width >= 1920 || d.height >= 1080))
             return sizeOK && format.videoSupportedFrameRateRanges.contains { Double(fps) >= $0.minFrameRate && Double(fps) <= $0.maxFrameRate }
         }
-        let chosenFormat: AVCaptureDevice.Format?
-        if resolution == "Open Gate" {
-            chosenFormat = candidates.max {
-                let a = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
-                let b = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
-                return Int64(a.width) * Int64(a.height) < Int64(b.width) * Int64(b.height)
-            }
-        } else if resolution == "1080p" {
-            chosenFormat = candidates.min {
-                let a = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
-                let b = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
-                return abs(Int(a.width * a.height) - 1920 * 1080) < abs(Int(b.width * b.height) - 1920 * 1080)
-            }
-        } else if resolution == "4K" {
-            chosenFormat = candidates.min {
-                let a = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
-                let b = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
-                let scoreA = abs(log((Double(a.width) * Double(a.height)) / (3840.0 * 2160.0))) + abs(Double(a.width) / Double(a.height) - 16.0 / 9.0) * 2
-                let scoreB = abs(log((Double(b.width) * Double(b.height)) / (3840.0 * 2160.0))) + abs(Double(b.width) / Double(b.height) - 16.0 / 9.0) * 2
-                return scoreA < scoreB
-            }
-        } else {
-            chosenFormat = candidates.max {
-                let a = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
-                let b = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
-                return Int64(a.width) * Int64(a.height) < Int64(b.width) * Int64(b.height)
-            }
+        let chosenFormat = candidates.min {
+            formatScore($0, resolution: resolution) < formatScore($1, resolution: resolution)
         }
         guard let chosen = chosenFormat else {
             Task { @MainActor in self.message = "\(resolution) at \(fps) FPS is unavailable on this lens." }
