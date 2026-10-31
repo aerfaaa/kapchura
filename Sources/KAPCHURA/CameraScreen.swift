@@ -7,6 +7,9 @@ import UIKit
 final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordingDelegate, AVCapturePhotoCaptureDelegate {
     @Published var isReady = false
     @Published var isRecording = false
+    @Published var recordingBusy = false
+    @Published var stabilizationSupported = false
+    @Published var stabilizationMessage = ""
     @Published var isManualFocus = false
     @Published var isTelephoto = false
     @Published var message = "Starting camera…"
@@ -90,6 +93,7 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
                 return "\(dimensions.width)×\(dimensions.height) · up to \(Int(fps)) fps"
             }
             self.session.commitConfiguration()
+            self.updateStabilizationSupport()
             self.session.startRunning()
             let rates = self.frameRates(for: device, resolution: self.resolution)
             Task { @MainActor in
@@ -130,6 +134,7 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
                     self.activeDevice = target
                     self.applyCaptureProfile(resolution: self.resolution, fps: self.frameRate, to: target)
                     self.session.commitConfiguration()
+                    self.updateStabilizationSupport()
                     let rawCount = self.photoOutput.availableRawPhotoPixelFormatTypes.count
                     let availableRates = self.frameRates(for: target, resolution: self.resolution)
                     Task { @MainActor in
@@ -230,14 +235,52 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
         applyCaptureProfile(resolution: resolution, fps: value, to: device)
     }
 
+    private func updateStabilizationSupport() {
+        guard let device = activeDevice else { return }
+        let standard = device.activeFormat.isVideoStabilizationModeSupported(.standard)
+        let cinematic = device.activeFormat.isVideoStabilizationModeSupported(.cinematic)
+        Task { @MainActor in
+            self.stabilizationSupported = standard || cinematic
+            if !self.stabilizationSupported {
+                self.stabilization = "Off"
+                self.stabilizationMessage = "Stabilisation unsupported on this camera format."
+            } else { self.stabilizationMessage = "" }
+        }
+    }
+
+    private func applyStabilization(to connection: AVCaptureConnection, device: AVCaptureDevice) {
+        guard connection.isVideoStabilizationSupported else {
+            stabilizationSupported = false
+            stabilization = "Off"
+            stabilizationMessage = "Stabilisation unsupported by recording connection."
+            return
+        }
+        let requested: AVCaptureVideoStabilizationMode = stabilization == "Maximum" ? .cinematic : (stabilization == "Minimal" ? .standard : .off)
+        let format = device.activeFormat
+        let actual: AVCaptureVideoStabilizationMode
+        if requested == .off || format.isVideoStabilizationModeSupported(requested) {
+            actual = requested
+        } else if requested == .cinematic && format.isVideoStabilizationModeSupported(.standard) {
+            actual = .standard
+            stabilizationMessage = "Maximum unavailable; using Standard."
+        } else {
+            actual = .off
+            stabilization = "Off"
+            stabilizationMessage = "Selected mode unavailable for this lens."
+        }
+        connection.preferredVideoStabilizationMode = actual
+    }
+
     func setStabilization(_ value: String) {
         stabilization = value
-        guard let connection = movieOutput.connection(with: .video) else { return }
-        guard connection.isVideoStabilizationSupported else { message = "Stabilization unavailable for this format."; return }
-        switch value {
-        case "Minimal": connection.preferredVideoStabilizationMode = .standard
-        case "Maximum": connection.preferredVideoStabilizationMode = .cinematic
-        default: connection.preferredVideoStabilizationMode = .off
+        guard let device = activeDevice, let connection = movieOutput.connection(with: .video) else {
+            stabilizationMessage = "Recording connection is not ready."
+            return
+        }
+        applyStabilization(to: connection, device: device)
+        if connection.isVideoStabilizationSupported {
+            let active = connection.preferredVideoStabilizationMode
+            stabilizationMessage = active == .off ? "Stabilisation: Off" : (active == .standard ? "Stabilisation: Standard" : "Stabilisation: Cinematic")
         }
     }
 
@@ -405,24 +448,42 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
     }
 
     func startStopRecording() {
-        guard isReady else { return }
-        if movieOutput.isRecording {
-            movieOutput.stopRecording()
-        } else {
-            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            let url = documents.appendingPathComponent("KAPCHURA-\(Int(Date().timeIntervalSince1970)).mov")
-            try? FileManager.default.removeItem(at: url)
-            guard let connection = movieOutput.connection(with: .video) else { message = "Video connection unavailable."; return }
-            if connection.isVideoStabilizationSupported {
-                switch stabilization {
-                case "Minimal": connection.preferredVideoStabilizationMode = .standard
-                case "Maximum": connection.preferredVideoStabilizationMode = .cinematic
-                default: connection.preferredVideoStabilizationMode = .off
-                }
+        guard isReady, !recordingBusy else { return }
+        recordingBusy = true
+        sessionQueue.async {
+            if self.movieOutput.isRecording {
+                self.movieOutput.stopRecording()
+                return
             }
-            movieOutput.startRecording(to: url, recordingDelegate: self)
-            isRecording = movieOutput.isRecording
-            message = isRecording ? "Recording · \(profileStatus)" : "Could not start recording."
+            guard let connection = self.movieOutput.connection(with: .video),
+                  let device = self.activeDevice else {
+                Task { @MainActor in
+                    self.recordingBusy = false
+                    self.message = "Video recording connection is unavailable."
+                }
+                return
+            }
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("KAPCHURA-\\(UUID().uuidString).mov")
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
+            }
+            self.applyStabilization(to: connection, device: device)
+            self.movieOutput.startRecording(to: url, recordingDelegate: self)
+            Task { @MainActor in
+                self.recordingURL = nil
+                self.message = "Starting recording…"
+            }
+        }
+    }
+
+    nonisolated func fileOutput(_ output: AVCaptureFileOutput,
+                                didStartRecordingTo fileURL: URL,
+                                from connections: [AVCaptureConnection]) {
+        Task { @MainActor in
+            self.isRecording = true
+            self.recordingBusy = false
+            self.message = "Recording · \\(self.profileStatus)"
         }
     }
 
@@ -432,13 +493,16 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
                                 error: Error?) {
         Task { @MainActor in
             self.isRecording = false
-            if let error {
-                self.message = "Recording failed: \(error.localizedDescription)"
+            self.recordingBusy = false
+            let fileExists = FileManager.default.fileExists(atPath: outputFileURL.path)
+            let nsError = error as NSError?
+            let finishedSuccessfully = nsError?.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool == true
+            guard fileExists else {
+                self.message = error.map { "Recording failed: \\( $0.localizedDescription)" } ?? "Recording ended without a video file."
                 return
             }
-            guard FileManager.default.fileExists(atPath: outputFileURL.path) else {
-                self.message = "Recording ended without a video file."
-                return
+            if let error, !finishedSuccessfully {
+                self.message = "Recording ended with an error; attempting to keep the video. \\(error.localizedDescription)"
             }
             self.recordingURL = outputFileURL
             PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
@@ -508,13 +572,16 @@ struct CameraScreen: View {
 
                 VStack(spacing: 0) {
                     topBar
-                        .padding(.top, max(geometry.safeAreaInsets.top, 8) + 5)
-                    Spacer(minLength: 12)
-                    bottomPanel
-                        .frame(maxHeight: geometry.size.height * (geometry.size.width > geometry.size.height ? 0.82 : 0.72))
-                        .padding(.bottom, max(geometry.safeAreaInsets.bottom, 8) + 8)
+                        .padding(.top, geometry.size.width > geometry.size.height ? 4 : max(geometry.safeAreaInsets.top, 8) + 5)
+                    Spacer(minLength: 4)
+                    if geometry.size.width > geometry.size.height {
+                        landscapeDock.frame(maxHeight: min(geometry.size.height * 0.48, 148))
+                    } else {
+                        bottomPanel.frame(maxHeight: geometry.size.height * 0.68)
+                    }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, geometry.size.width > geometry.size.height ? 6 : 14)
+                .padding(.bottom, 0)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .background(.black)
@@ -663,7 +730,7 @@ struct CameraScreen: View {
             }
             .padding(.top, 2)
 
-            Text(camera.message)
+            Text(camera.stabilizationMessage.isEmpty ? camera.message : camera.stabilizationMessage)
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.68))
                 .lineLimit(2)
@@ -672,18 +739,62 @@ struct CameraScreen: View {
         }
         }
         .scrollIndicators(.hidden)
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 12)
+        .padding(.top, 9)
+        .padding(.bottom, 28)
         .background {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .environment(\.colorScheme, .dark)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(.white.opacity(0.16), lineWidth: 0.8)
-                }
+            Rectangle().fill(.ultraThinMaterial)
+                .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.18)).frame(height: 0.6) }
+                .ignoresSafeArea(edges: .bottom)
         }
+    }
+
+    private var landscapeDock: some View {
+        HStack(spacing: 8) {
+            VStack(spacing: 4) {
+                Picker("Format", selection: Binding(get: { camera.resolution }, set: { camera.setResolution($0) })) {
+                    Text("1080").tag("1080p")
+                    Text("4K").tag("4K")
+                    Text("OPEN").tag("Open Gate")
+                }.pickerStyle(.segmented).disabled(camera.isRecording)
+                HStack(spacing: 3) {
+                    Picker("FPS", selection: Binding(get: { camera.frameRate }, set: { camera.setFrameRate($0) })) {
+                        ForEach(camera.supportedFrameRates, id: \\.self) { Text("\\($0)").tag($0) }
+                    }.pickerStyle(.segmented).disabled(camera.isRecording)
+                    Picker("Stabilisation", selection: Binding(get: { camera.stabilization }, set: { camera.setStabilization($0) })) {
+                        Text("OFF").tag("Off")
+                        Text("MIN").tag("Minimal")
+                        Text("MAX").tag("Maximum")
+                    }.pickerStyle(.menu).tint(.white).disabled(camera.isRecording)
+                }
+            }
+            VStack(spacing: 2) {
+                compactSlider("ISO", value: $camera.iso, range: 25...1600) { camera.setISO($0) }
+                compactSlider("SHUT", value: $camera.shutter, range: 1.0/1000...1.0/15) { camera.setShutter($0) }
+            }
+            VStack(spacing: 2) {
+                compactSlider("FOCUS", value: $camera.focus, range: 0...1) { camera.setManualFocus(Float($0)) }
+                compactSlider("WB", value: $camera.temperature, range: 2500...8000) { camera.setWhiteBalance($0) }
+            }
+            recordButton.scaleEffect(0.68).frame(width: 54, height: 54)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background {
+            Rectangle().fill(.ultraThinMaterial)
+                .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.18)).frame(height: 0.6) }
+                .ignoresSafeArea(edges: .bottom)
+        }
+    }
+
+    private func compactSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>,
+                               changed: @escaping (Double) -> Void) -> some View {
+        HStack(spacing: 3) {
+            Text(title).font(.system(size: 7, weight: .semibold, design: .monospaced)).frame(width: 40, alignment: .leading)
+            Slider(value: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0; changed($0) }), in: range).tint(.white)
+        }
+        .foregroundStyle(.white.opacity(0.9))
+        .frame(maxWidth: .infinity)
     }
 
     private var profilePickerRow: some View {
@@ -757,7 +868,7 @@ struct CameraScreen: View {
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .disabled(!camera.isReady)
+        .disabled(!camera.isReady || camera.recordingBusy)
         .opacity(camera.isReady ? 1 : 0.45)
     }
 }
