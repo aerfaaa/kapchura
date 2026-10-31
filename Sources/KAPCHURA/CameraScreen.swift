@@ -19,6 +19,14 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
     @Published var rawPixelFormatCount = 0
     @Published var availableFormats: [String] = []
     @Published var recordingURL: URL?
+    @Published var resolution = "1080p"
+    @Published var frameRate = 24
+    @Published var stabilization = "Off"
+    @Published var settingsCollapsed = false
+    @Published var isoAutomatic = true
+    @Published var shutterAutomatic = true
+    @Published var focusAutomatic = true
+    @Published var whiteBalanceAutomatic = true
 
     let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "com.aerfaaa.kapchura.session")
@@ -154,6 +162,7 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
         do {
             try device.lockForConfiguration()
             device.setExposureModeCustom(duration: device.exposureDuration, iso: bounded, completionHandler: nil)
+            isoAutomatic = false
             device.unlockForConfiguration()
             iso = Double(bounded)
         } catch { message = "ISO change failed." }
@@ -169,6 +178,7 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             try device.lockForConfiguration()
             device.setExposureModeCustom(duration: CMTime(seconds: bounded, preferredTimescale: 1_000_000),
                                          iso: safeISO, completionHandler: nil)
+            shutterAutomatic = false
             device.unlockForConfiguration()
             shutter = bounded
         } catch { message = "Shutter change failed." }
@@ -180,6 +190,8 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             try device.lockForConfiguration()
             device.setFocusModeLocked(lensPosition: min(max(position, 0), 1), completionHandler: nil)
             device.unlockForConfiguration()
+            focusAutomatic = false
+            isManualFocus = true
             focus = Double(position)
         } catch { message = "Manual focus change failed." }
     }
@@ -191,6 +203,7 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
             device.unlockForConfiguration()
             isManualFocus = false
+            focusAutomatic = true
             message = "Continuous autofocus enabled"
         } catch { message = "Unable to enable autofocus." }
     }
@@ -224,8 +237,34 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             )
             device.setWhiteBalanceModeLocked(with: gains, completionHandler: nil)
             device.unlockForConfiguration()
+            whiteBalanceAutomatic = false
             temperature = kelvin
         } catch { message = "White balance change failed." }
+    }
+
+    func setWhiteBalanceAutomatic() {
+        guard let device = activeDevice else { return }
+        do {
+            try device.lockForConfiguration()
+            if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                device.whiteBalanceMode = .continuousAutoWhiteBalance
+            }
+            device.unlockForConfiguration()
+            whiteBalanceAutomatic = true
+        } catch { message = "Unable to enable automatic white balance." }
+    }
+
+    func setExposureAutomatic() {
+        guard let device = activeDevice else { return }
+        do {
+            try device.lockForConfiguration()
+            if device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposureMode = .continuousAutoExposure
+            }
+            device.unlockForConfiguration()
+            isoAutomatic = true
+            shutterAutomatic = true
+        } catch { message = "Unable to enable automatic exposure." }
     }
 
     func captureRAWPhoto() {
@@ -535,9 +574,13 @@ struct CameraScreen: View {
                 .tracking(0.8)
                 .foregroundStyle(.white.opacity(0.7))
                 .frame(width: 58, alignment: .leading)
-            Slider(value: value, in: range) { editing in
-                if !editing { changed(value.wrappedValue) }
-            }
+            Slider(value: Binding(
+                get: { value.wrappedValue },
+                set: { newValue in
+                    value.wrappedValue = newValue
+                    changed(newValue)
+                }
+            ), in: range)
             .tint(.white)
             Text(valueText)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
