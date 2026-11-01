@@ -618,7 +618,7 @@ struct CameraScreen: View {
                     .animation(.spring(response: 0.38, dampingFraction: 0.88), value: camera.resolution)
 
                 VStack(spacing: 0) {
-                    topBar
+                    statusBar
                         .padding(.horizontal, landscape ? 24 : 20)
                         .padding(.top, max(geometry.safeAreaInsets.top, landscape ? 8 : 12) + 6)
 
@@ -627,7 +627,7 @@ struct CameraScreen: View {
                     if !camera.settingsCollapsed {
                         settingsPanel(landscape: landscape)
                             .padding(.horizontal, landscape ? 70 : 14)
-                            .padding(.bottom, 14)
+                            .padding(.bottom, 8)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
 
@@ -646,21 +646,9 @@ struct CameraScreen: View {
         .onAppear { camera.settingsCollapsed = true }
     }
 
-    private var topBar: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "camera.aperture")
-                    .font(.system(size: 18, weight: .medium))
-                Text("KAPCHURA")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .tracking(1.7)
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 15)
-            .padding(.vertical, 11)
-            .liquidGlassCapsule()
-
-            Spacer()
+    private var statusBar: some View {
+        HStack(spacing: 10) {
+            Spacer(minLength: 0)
 
             HStack(spacing: 7) {
                 Circle()
@@ -672,25 +660,38 @@ struct CameraScreen: View {
                     .lineLimit(1)
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 13)
-            .padding(.vertical, 11)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .liquidGlassCapsule()
+
+            HStack(spacing: 5) {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("L")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                Capsule().fill(camera.isRecording ? Color.green : Color.white.opacity(0.42))
+                    .frame(width: 10, height: 3)
+                Text("R")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                Capsule().fill(camera.isRecording ? Color.green : Color.white.opacity(0.42))
+                    .frame(width: 10, height: 3)
+            }
+            .foregroundStyle(.white.opacity(0.9))
+            .padding(.horizontal, 11)
+            .padding(.vertical, 9)
             .liquidGlassCapsule()
         }
     }
 
     private func bottomCameraBar(landscape: Bool) -> some View {
         HStack(alignment: .center, spacing: 0) {
-            // The shutter stays visually centred regardless of the arrow's width.
-            Color.clear
-                .frame(width: 54, height: 54)
-
+            Color.clear.frame(width: 54, height: 54)
             Spacer(minLength: 0)
-
             recordButton
-
             Spacer(minLength: 0)
 
             Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
                     camera.settingsCollapsed.toggle()
                 }
@@ -698,7 +699,7 @@ struct CameraScreen: View {
                 Image(systemName: camera.settingsCollapsed ? "chevron.up" : "chevron.down")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 48, height: 48)
+                    .frame(width: 44, height: 44)
                     .contentShape(Circle())
                     .liquidGlassCircle()
             }
@@ -706,16 +707,8 @@ struct CameraScreen: View {
             .accessibilityLabel(camera.settingsCollapsed ? "Show camera settings" : "Hide camera settings")
         }
         .padding(.horizontal, landscape ? 18 : 16)
-        .padding(.vertical, 10)
         .frame(maxWidth: landscape ? 440 : .infinity)
         .frame(maxWidth: .infinity)
-        .background {
-            // Floating glass dock, not a full-width opaque black slab.
-            Capsule()
-                .liquidGlassCapsule()
-                .shadow(color: .black.opacity(0.25), radius: 18, y: 7)
-                .padding(.horizontal, landscape ? 0 : 2)
-        }
     }
 
     private func settingsPanel(landscape: Bool) -> some View {
@@ -863,14 +856,10 @@ struct CameraScreen: View {
                 .tracking(0.5)
                 .foregroundStyle(.white.opacity(0.65))
                 .frame(width: 65, alignment: .leading)
-            Slider(value: Binding(
-                get: { value.wrappedValue },
-                set: { newValue in
-                    value.wrappedValue = newValue
-                    changed(newValue)
-                }
-            ), in: range)
-            .tint(.white)
+            TactileDial(value: value, range: range, step: dialStep(for: title)) { newValue in
+                changed(newValue)
+            }
+            .frame(height: 30)
             Text(valueText)
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white)
@@ -885,6 +874,15 @@ struct CameraScreen: View {
             .buttonStyle(.plain)
         }
         .frame(height: 28)
+    }
+
+    private func dialStep(for title: String) -> Double {
+        switch title {
+        case "ISO": return 5
+        case "FOCUS": return 0.01
+        case "SHUTTER": return 1.0 / 120
+        default: return 50
+        }
     }
 
     private var recordButton: some View {
@@ -911,6 +909,77 @@ struct CameraScreen: View {
         .disabled(!camera.isReady || camera.recordingBusy)
         .opacity(camera.isReady ? 1 : 0.45)
         .accessibilityLabel(camera.isRecording ? "Stop recording" : "Start recording")
+    }
+}
+
+private struct TactileDial: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let changed: (Double) -> Void
+
+    @State private var dragStartValue: Double?
+    @State private var lastHapticStep: Int = Int.min
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            ZStack {
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(.white.opacity(0.055))
+
+                Canvas { context, size in
+                    let center = size.width / 2
+                    let tickSpacing: CGFloat = 8
+                    let count = Int(size.width / tickSpacing) + 2
+                    for index in 0..<count {
+                        let x = CGFloat(index) * tickSpacing
+                        let relative = abs(x - center)
+                        let major = Int(relative / tickSpacing).isMultiple(of: 5)
+                        let height: CGFloat = major ? 13 : 7
+                        var path = Path()
+                        path.move(to: CGPoint(x: x, y: size.height / 2 - height / 2))
+                        path.addLine(to: CGPoint(x: x, y: size.height / 2 + height / 2))
+                        context.stroke(path, with: .color(.white.opacity(major ? 0.85 : 0.38)), lineWidth: major ? 1.3 : 0.8)
+                    }
+                    var indicator = Path()
+                    indicator.move(to: CGPoint(x: center, y: 2))
+                    indicator.addLine(to: CGPoint(x: center, y: size.height - 2))
+                    context.stroke(indicator, with: .color(.white), lineWidth: 1.8)
+                }
+
+                LinearGradient(colors: [.black.opacity(0.5), .clear, .black.opacity(0.5)],
+                               startPoint: .leading, endPoint: .trailing)
+                    .allowsHitTesting(false)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        if dragStartValue == nil { dragStartValue = value }
+                        guard let start = dragStartValue else { return }
+                        let sensitivity = (range.upperBound - range.lowerBound) / 10
+                        let raw = start + Double(gesture.translation.width / max(width, 1)) * sensitivity
+                        let snapped = min(max((raw / step).rounded() * step, range.lowerBound), range.upperBound)
+                        guard snapped != value else { return }
+                        value = snapped
+                        changed(snapped)
+                        let hapticIndex = Int((snapped - range.lowerBound) / max(step, 0.000001))
+                        if hapticIndex != lastHapticStep {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            lastHapticStep = hapticIndex
+                        }
+                    }
+                    .onEnded { _ in
+                        dragStartValue = nil
+                        lastHapticStep = Int.min
+                    }
+            )
+            .accessibilityElement()
+            .accessibilityLabel("Adjust camera setting")
+            .accessibilityValue(String(format: "%.3f", value))
+        }
     }
 }
 
