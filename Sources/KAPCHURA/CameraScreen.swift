@@ -37,6 +37,13 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
     private let sessionQueue = DispatchQueue(label: "com.aerfaaa.kapchura.session")
     private let movieOutput = AVCaptureMovieFileOutput()
     private let photoOutput = AVCapturePhotoOutput()
+    private let frameProbeOutput = AVCaptureVideoDataOutput()
+    private lazy var frameProbe = CameraFrameProbe { [weak self] in
+        Task { @MainActor in
+            guard let self else { return }
+            self.message = "Live camera frames received."
+        }
+    }
     private var activeDevice: AVCaptureDevice?
     private var wideDevice: AVCaptureDevice?
     private var teleDevice: AVCaptureDevice?
@@ -94,6 +101,13 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             }
             if self.session.canAddOutput(self.movieOutput) { self.session.addOutput(self.movieOutput) }
             if self.session.canAddOutput(self.photoOutput) { self.session.addOutput(self.photoOutput) }
+            // A lightweight frame probe tells us whether the capture graph is
+            // actually delivering images, independently of the SwiftUI preview.
+            self.frameProbeOutput.alwaysDiscardsLateVideoFrames = true
+            if self.session.canAddOutput(self.frameProbeOutput) {
+                self.session.addOutput(self.frameProbeOutput)
+                self.frameProbeOutput.setSampleBufferDelegate(self.frameProbe, queue: self.sessionQueue)
+            }
             let rawTypes = self.photoOutput.availableRawPhotoPixelFormatTypes
             let formats = device.formats.map { format -> String in
                 let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
@@ -121,7 +135,7 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
                     self.focus = Double(device.lensPosition)
                     self.isReady = running
                     self.message = running
-                        ? (rawTypes.isEmpty ? "Camera ready · RAW still unavailable" : "Camera ready · RAW still supported")
+                        ? "Camera session running · waiting for first video frame…"
                         : "Camera session failed to start. Check camera permission and close other camera apps."
                 }
             }
@@ -590,6 +604,26 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
                 }
             }
         }
+    }
+}
+
+final class CameraFrameProbe: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+    private let onFirstFrame: () -> Void
+    private let lock = NSLock()
+    private var hasReportedFrame = false
+
+    init(onFirstFrame: @escaping () -> Void) {
+        self.onFirstFrame = onFirstFrame
+    }
+
+    func captureOutput(_ output: AVCaptureOutput,
+                       didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        lock.lock()
+        let shouldReport = !hasReportedFrame
+        hasReportedFrame = true
+        lock.unlock()
+        if shouldReport { onFirstFrame() }
     }
 }
 
