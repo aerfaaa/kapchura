@@ -25,7 +25,7 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
     @Published var resolution = "1080p"
     @Published var frameRate = 24
     @Published var stabilization = "Off"
-    @Published var settingsCollapsed = false
+    @Published var settingsCollapsed = true
     @Published var isoAutomatic = true
     @Published var shutterAutomatic = true
     @Published var focusAutomatic = true
@@ -689,8 +689,7 @@ struct CameraScreen: View {
         .background {
             // Floating glass dock, not a full-width opaque black slab.
             Capsule()
-                .fill(.ultraThinMaterial.opacity(0.72))
-                .overlay(Capsule().stroke(.white.opacity(0.17), lineWidth: 0.8))
+                .liquidGlassCapsule()
                 .shadow(color: .black.opacity(0.25), radius: 18, y: 7)
                 .padding(.horizontal, landscape ? 0 : 2)
         }
