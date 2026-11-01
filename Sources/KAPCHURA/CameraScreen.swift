@@ -578,66 +578,48 @@ struct CameraScreen: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let landscape = geometry.size.width > geometry.size.height
+            let previewAspect: CGFloat = camera.resolution == "Open Gate" ? (3.0 / 4.0) : (9.0 / 16.0)
             ZStack {
-                Color.black
-                CameraPreview(session: camera.session, stabilization: camera.stabilization)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .clipped()
+                Color.black.ignoresSafeArea()
 
-                // A subtle readability gradient; the live image remains the main surface.
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.black.opacity(0.62), .clear],
-                                   startPoint: .top, endPoint: .bottom)
-                        .frame(height: 170)
-                    Spacer(minLength: 0)
-                    LinearGradient(colors: [.clear, .black.opacity(0.28), .black.opacity(0.88)],
-                                   startPoint: .top, endPoint: .bottom)
-                        .frame(height: 310)
-                }
-                .ignoresSafeArea()
+                CameraPreview(session: camera.session, stabilization: camera.stabilization)
+                    .aspectRatio(landscape ? (camera.resolution == "Open Gate" ? (4.0 / 3.0) : (16.0 / 9.0)) : previewAspect, contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .animation(.easeInOut(duration: 0.22), value: camera.resolution)
 
                 VStack(spacing: 0) {
                     topBar
-                        .padding(.horizontal, 14)
-                        .padding(.top, geometry.size.width > geometry.size.height ? 4 : max(geometry.safeAreaInsets.top, 8) + 5)
-                    Spacer(minLength: 4)
-                    if geometry.size.width > geometry.size.height {
+                        .padding(.horizontal, 18)
+                        .padding(.top, landscape ? 6 : max(geometry.safeAreaInsets.top, 8) + 8)
+                    Spacer(minLength: 0)
+                    if landscape {
                         landscapeDock
                             .frame(maxWidth: .infinity)
-                            .frame(maxHeight: min(geometry.size.height * 0.48, 148))
                             .padding(.leading, max(geometry.safeAreaInsets.leading, 34))
                             .padding(.trailing, max(geometry.safeAreaInsets.trailing, 34))
                     } else {
-                        bottomPanel
-                            .frame(maxWidth: .infinity)
-                            .frame(maxHeight: geometry.size.height * 0.68)
+                        nativeBottomControls
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .padding(.bottom, 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(edges: .bottom)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
-            .background(.black)
-            .ignoresSafeArea()
+            .background(Color.black)
         }
         .preferredColorScheme(.dark)
     }
 
     private var topBar: some View {
         HStack(alignment: .center, spacing: 14) {
-            Button {
-                camera.switchLens(telephoto: false)
-            } label: {
-                lensPill("1×", selected: !camera.isTelephoto)
-            }
-            .disabled(!camera.isReady)
-
-            Button {
-                camera.switchLens(telephoto: true)
-            } label: {
-                lensPill("2×", selected: camera.isTelephoto)
-            }
-            .disabled(!camera.isReady)
+            Text(camera.resolution == "Open Gate" ? "4:3" : "16:9")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(.black.opacity(0.35), in: Capsule())
 
             Spacer()
 
@@ -671,65 +653,58 @@ struct CameraScreen: View {
             .overlay(Capsule().stroke(.white.opacity(selected ? 0 : 0.35), lineWidth: 0.7))
     }
 
-    private var bottomPanel: some View {
-        ScrollView(.vertical) {
-        VStack(spacing: 12) {
-            HStack(spacing: 10) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { camera.settingsCollapsed.toggle() }
-                } label: {
-                    Image(systemName: camera.settingsCollapsed ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 28, height: 28)
-                        .background(.white.opacity(0.12), in: Circle())
-                }
-                Button("AUTO") { camera.setAutofocus() }
-                    .foregroundStyle(!camera.isManualFocus ? .black : .white)
-                    .background(!camera.isManualFocus ? Color.white : Color.white.opacity(0.12), in: Capsule())
-                Button("MF") { camera.enableManualFocus() }
-                    .foregroundStyle(camera.isManualFocus ? .black : .white)
-                    .background(camera.isManualFocus ? Color.white : Color.white.opacity(0.12), in: Capsule())
-                Spacer()
-                Text(camera.lensLabel)
-                    .foregroundStyle(.white.opacity(0.75))
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .tracking(1)
-                if camera.rawStillAvailable {
-                    Text("RAW STILL READY")
-                        .foregroundStyle(.white.opacity(0.6))
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                }
-            }
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
-            .buttonStyle(.plain)
-            .padding(.bottom, 2)
-
+    private var nativeBottomControls: some View {
+        VStack(spacing: 10) {
             if !camera.settingsCollapsed {
-                VStack(spacing: 7) {
-                    profilePickerRow
-                    sliderRow("ISO", value: $camera.iso, range: 25...1600, valueText: String(Int(camera.iso)), automatic: camera.isoAutomatic, autoAction: { camera.setExposureAutomatic() }) { camera.setISO($0) }
-                    sliderRow("SHUTTER", value: $camera.shutter, range: 1.0/1000...1.0/15, valueText: "1/\(Int(1 / max(camera.shutter, 0.0001)))", automatic: camera.shutterAutomatic, autoAction: { camera.setExposureAutomatic() }) { camera.setShutter($0) }
-                    sliderRow("FOCUS", value: $camera.focus, range: 0...1, valueText: String(format: "%.2f", camera.focus), automatic: camera.focusAutomatic, autoAction: { camera.setAutofocus() }) { camera.setManualFocus(Float($0)) }
-                    sliderRow("WB", value: $camera.temperature, range: 2500...8000, valueText: "\(Int(camera.temperature))K", automatic: camera.whiteBalanceAutomatic, autoAction: { camera.setWhiteBalanceAutomatic() }) { camera.setWhiteBalance($0) }
+                HStack(spacing: 14) {
+                    Text("FORMAT").font(.system(size: 10, weight: .semibold, design: .rounded)).foregroundStyle(.white.opacity(0.65))
+                    Picker("Format", selection: Binding(get: { camera.resolution }, set: { camera.setResolution($0) })) {
+                        Text("1080p").tag("1080p")
+                        Text("4K").tag("4K")
+                        Text("Open Gate").tag("Open Gate")
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(camera.isRecording)
+                    Picker("FPS", selection: Binding(get: { camera.frameRate }, set: { camera.setFrameRate($0) })) {
+                        ForEach(camera.supportedFrameRates, id: \.self) { Text("\($0)").tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .tint(.white)
+                    .disabled(camera.isRecording || camera.supportedFrameRates.isEmpty)
+                    Picker("Stabilisation", selection: Binding(get: { camera.stabilization }, set: { camera.setStabilization($0) })) {
+                        Text("Off").tag("Off")
+                        Text("Minimal").tag("Minimal")
+                        Text("Maximum").tag("Maximum")
+                    }
+                    .pickerStyle(.menu)
+                    .tint(.white)
+                    .disabled(camera.isRecording)
                 }
+                .font(.system(size: 11, weight: .medium))
+                .padding(.horizontal, 16)
+
+                HStack(spacing: 12) {
+                    sliderRow("ISO", value: $camera.iso, range: 25...1600, valueText: String(Int(camera.iso)), automatic: camera.isoAutomatic, autoAction: { camera.setExposureAutomatic() }) { camera.setISO($0) }
+                    sliderRow("FOCUS", value: $camera.focus, range: 0...1, valueText: String(format: "%.2f", camera.focus), automatic: camera.focusAutomatic, autoAction: { camera.setAutofocus() }) { camera.setManualFocus(Float($0)) }
+                }
+                .padding(.horizontal, 16)
             }
 
-            HStack(alignment: .center) {
-                Button {
-                    camera.captureRAWPhoto()
-                } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: "camera")
-                            .font(.system(size: 19, weight: .regular))
-                        Text("RAW")
-                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                            .tracking(1)
-                    }
-                    .foregroundStyle(camera.rawStillAvailable ? .white : .white.opacity(0.35))
-                    .frame(width: 58, height: 58)
+            HStack(alignment: .center, spacing: 0) {
+                Button { camera.captureRAWPhoto() } label: {
+                    Image(systemName: "camera")
+                        .font(.system(size: 22, weight: .regular))
+                        .foregroundStyle(camera.rawStillAvailable && !camera.isRecording ? .white : .white.opacity(0.3))
+                        .frame(width: 54, height: 54)
                 }
                 .disabled(!camera.isReady || !camera.rawStillAvailable || camera.isRecording)
+
+                Spacer()
+
+                Button { camera.switchLens(telephoto: false) } label: { zoomChoice("1×", selected: !camera.isTelephoto) }
+                    .disabled(!camera.isReady)
+                Button { camera.switchLens(telephoto: true) } label: { zoomChoice("2×", selected: camera.isTelephoto) }
+                    .disabled(!camera.isReady)
 
                 Spacer()
 
@@ -737,49 +712,36 @@ struct CameraScreen: View {
 
                 Spacer()
 
-                if let url = camera.recordingURL {
-                    ShareLink(item: url) {
-                        VStack(spacing: 4) {
-                            Image(systemName: "square.and.arrow.up")
-                                .font(.system(size: 18))
-                            Text("EXPORT")
-                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                                .tracking(1)
-                        }
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { camera.settingsCollapsed.toggle() }
+                } label: {
+                    Image(systemName: camera.settingsCollapsed ? "slider.horizontal.3" : "chevron.down")
+                        .font(.system(size: 18, weight: .medium))
                         .foregroundStyle(.white)
-                        .frame(width: 58, height: 58)
-                    }
-                } else {
-                    VStack(spacing: 4) {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 18))
-                        Text("EXPORT")
-                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                            .tracking(1)
-                    }
-                    .foregroundStyle(.white.opacity(0.25))
-                    .frame(width: 58, height: 58)
+                        .frame(width: 54, height: 54)
                 }
             }
-            .padding(.top, 2)
+            .padding(.horizontal, 22)
 
-            Text(camera.stabilizationMessage.isEmpty ? camera.message : camera.stabilizationMessage)
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.68))
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
+            Text(camera.isRecording ? "RECORDING" : camera.message)
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(camera.isRecording ? .red : .white.opacity(0.65))
+                .lineLimit(1)
                 .frame(maxWidth: .infinity)
+                .padding(.bottom, 8)
         }
-        }
-        .scrollIndicators(.hidden)
-        .padding(.horizontal, 12)
-        .padding(.top, 9)
-        .padding(.bottom, 28)
+        .padding(.top, 12)
         .background {
-            Rectangle().fill(Color.black.opacity(0.96))
-                .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.16)).frame(height: 0.6) }
-                .ignoresSafeArea(edges: .bottom)
+            Rectangle().fill(Color.black.opacity(0.98)).ignoresSafeArea(edges: .bottom)
         }
+    }
+
+    private func zoomChoice(_ title: String, selected: Bool) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(selected ? .black : .white)
+            .frame(width: 42, height: 34)
+            .background(selected ? Color.white : Color.white.opacity(0.12), in: Capsule())
     }
 
     private var landscapeDock: some View {
