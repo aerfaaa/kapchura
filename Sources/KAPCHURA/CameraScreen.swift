@@ -102,7 +102,12 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             }
             self.session.commitConfiguration()
             self.updateStabilizationSupport()
-            self.session.startRunning()
+            // startRunning can block while AVFoundation prepares the capture graph.
+            // Keep that work off the main thread so the UI and dial remain responsive.
+            let configuredSession = self.session
+            self.sessionQueue.async {
+                if !configuredSession.isRunning { configuredSession.startRunning() }
+            }
             let rates = self.frameRates(for: device, resolution: self.resolution)
             Task { @MainActor in
                 self.supportedFrameRates = rates
@@ -997,7 +1002,10 @@ struct CameraScreen: View {
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white)
                 .frame(width: 42, alignment: .trailing)
-            Button(action: autoAction) {
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                autoAction()
+            } label: {
                 Text("A")
                     .font(.system(size: 9, weight: .bold, design: .rounded))
                     .foregroundStyle(automatic ? .black : .white)
@@ -1020,6 +1028,7 @@ struct CameraScreen: View {
 
     private var recordButton: some View {
         Button {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             camera.startStopRecording()
         } label: {
             ZStack {
@@ -1073,6 +1082,8 @@ private struct TactileDial: View {
 
     @State private var dragStartValue: Double?
     @State private var lastHapticStep: Int = Int.min
+    @State private var visualOffset: CGFloat = 0
+    @State private var selectionFeedback = UISelectionFeedbackGenerator()
 
     var body: some View {
         GeometryReader { geometry in
@@ -1084,16 +1095,18 @@ private struct TactileDial: View {
                 Canvas { context, size in
                     let center = size.width / 2
                     let tickSpacing: CGFloat = 8
-                    let count = Int(size.width / tickSpacing) + 2
+                    let count = Int(size.width / tickSpacing) + 4
                     for index in 0..<count {
-                        let x = CGFloat(index) * tickSpacing
+                        // The ruler physically scrolls beneath the fixed centre marker.
+                        let x = CGFloat(index) * tickSpacing + visualOffset
+                        guard x >= -tickSpacing, x <= size.width + tickSpacing else { continue }
                         let relative = abs(x - center)
-                        let major = Int(relative / tickSpacing).isMultiple(of: 5)
+                        let major = Int((relative / tickSpacing).rounded()).isMultiple(of: 5)
                         let height: CGFloat = major ? 13 : 7
                         var path = Path()
                         path.move(to: CGPoint(x: x, y: size.height / 2 - height / 2))
                         path.addLine(to: CGPoint(x: x, y: size.height / 2 + height / 2))
-                        context.stroke(path, with: .color(.white.opacity(major ? 0.85 : 0.38)), lineWidth: major ? 1.3 : 0.8)
+                        context.stroke(path, with: .color(.white.opacity(major ? 0.9 : 0.42)), lineWidth: major ? 1.3 : 0.8)
                     }
                     var indicator = Path()
                     indicator.move(to: CGPoint(x: center, y: 2))
@@ -1110,9 +1123,13 @@ private struct TactileDial: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { gesture in
-                        if dragStartValue == nil { dragStartValue = value }
+                        if dragStartValue == nil {
+                            dragStartValue = value
+                            selectionFeedback.prepare()
+                        }
                         guard let start = dragStartValue else { return }
                         let sensitivity = (range.upperBound - range.lowerBound) / 10
+                        visualOffset = -gesture.translation.width.truncatingRemainder(dividingBy: 8)
                         let raw = start + Double(gesture.translation.width / max(width, 1)) * sensitivity
                         let snapped = min(max((raw / step).rounded() * step, range.lowerBound), range.upperBound)
                         guard snapped != value else { return }
@@ -1120,13 +1137,15 @@ private struct TactileDial: View {
                         changed(snapped)
                         let hapticIndex = Int((snapped - range.lowerBound) / max(step, 0.000001))
                         if hapticIndex != lastHapticStep {
-                            UISelectionFeedbackGenerator().selectionChanged()
+                            selectionFeedback.selectionChanged()
+                            selectionFeedback.prepare()
                             lastHapticStep = hapticIndex
                         }
                     }
                     .onEnded { _ in
                         dragStartValue = nil
                         lastHapticStep = Int.min
+                        withAnimation(.easeOut(duration: 0.12)) { visualOffset = 0 }
                     }
             )
             .accessibilityElement()
