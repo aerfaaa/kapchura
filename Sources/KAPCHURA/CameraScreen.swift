@@ -254,7 +254,6 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
 
     private func applyStabilization(to connection: AVCaptureConnection, device: AVCaptureDevice) {
         // Never let AVFoundation silently re-enable stabilisation when the user chooses Off.
-        connection.automaticallyAdjustsVideoStabilizationWhenAvailable = false
         if stabilization == "Off" {
             connection.preferredVideoStabilizationMode = .off
             stabilizationMessage = "Stabilisation disabled."
@@ -600,7 +599,6 @@ struct CameraPreview: UIViewRepresentable {
 
     private func applyPreviewStabilization(_ connection: AVCaptureConnection?) {
         guard let connection else { return }
-        connection.automaticallyAdjustsVideoStabilizationWhenAvailable = false
         switch stabilization {
         case "Minimal":
             connection.preferredVideoStabilizationMode = connection.isVideoStabilizationSupported ? .standard : .off
