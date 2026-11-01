@@ -2,9 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>UILaunchScreen</key>
+    <dict/>
     <key>NSCameraUsageDescription</key>
-    <string>KAPCHURA uses the camera to capture video.</string>
+    <string>KAPCHURA uses the camera to capture video and RAW still photos.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>KAPCHURA uses the microphone to record audio with video.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>KAPCHURA saves captured photos and recorded videos to your Photos library.</string>
 </dict>
 </plist>
