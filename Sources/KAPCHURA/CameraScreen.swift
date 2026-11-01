@@ -505,32 +505,55 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
                                 didFinishRecordingTo outputFileURL: URL,
                                 from connections: [AVCaptureConnection],
                                 error: Error?) {
+        // Keep finalisation small: do not begin a Photos transaction while AVFoundation
+        // is completing the movie. The user can save the finished file explicitly.
+        let fileExists = FileManager.default.fileExists(atPath: outputFileURL.path)
+        let fileAttributes = try? FileManager.default.attributesOfItem(atPath: outputFileURL.path)
+        let fileSize = (fileAttributes?[.size] as? NSNumber)?.int64Value ?? 0
+        let nsError = error as NSError?
+        let finishedSuccessfully = nsError?.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool == true
+
         Task { @MainActor in
             self.isRecording = false
             self.recordingBusy = false
-            let fileExists = FileManager.default.fileExists(atPath: outputFileURL.path)
-            let nsError = error as NSError?
-            let finishedSuccessfully = nsError?.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool == true
-            guard fileExists else {
-                self.message = error.map { "Recording failed: \( $0.localizedDescription)" } ?? "Recording ended without a video file."
+
+            guard fileExists, fileSize > 0 else {
+                self.recordingURL = nil
+                self.message = error.map { "Recording failed: \($0.localizedDescription)" }
+                    ?? "Recording ended without a usable video file."
                 return
             }
-            if let error, !finishedSuccessfully {
-                self.message = "Recording ended with an error; attempting to keep the video. \(error.localizedDescription)"
-            }
+
             self.recordingURL = outputFileURL
-            PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
-                guard status == .authorized || status == .limited else {
-                    Task { @MainActor in self.message = "Recording kept in KAPCHURA files. Allow Photos access to save it to Photos." }
-                    return
-                }
-                PHPhotoLibrary.shared().performChanges({
-                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: outputFileURL)
-                }) { success, saveError in
-                    Task { @MainActor in
-                        self.message = success ? "Video saved to Photos." :
-                            "Video kept in KAPCHURA files. Photos save failed: \(saveError?.localizedDescription ?? "unknown error")"
-                    }
+            if let error, !finishedSuccessfully {
+                self.message = "Video recovered with a warning: \(error.localizedDescription)"
+            } else {
+                self.message = "Recording finished · video kept in KAPCHURA"
+            }
+        }
+    }
+
+    func saveFinishedRecordingToPhotos() {
+        guard let url = recordingURL,
+              FileManager.default.fileExists(atPath: url.path) else {
+            message = "No finished video is available to save."
+            return
+        }
+
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
+            guard status == .authorized || status == .limited else {
+                Task { @MainActor in self?.message = "Allow Photos access to save this video." }
+                return
+            }
+
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+            }) { success, saveError in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.message = success
+                        ? "Video saved to Photos."
+                        : "Video remains in KAPCHURA files. Save failed: \(saveError?.localizedDescription ?? "unknown error")"
                 }
             }
         }
@@ -776,6 +799,20 @@ struct CameraScreen: View {
                 .foregroundStyle(.white.opacity(0.58))
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            if camera.recordingURL != nil {
+                Button {
+                    camera.saveFinishedRecordingToPhotos()
+                } label: {
+                    Label("Save last video to Photos", systemImage: "square.and.arrow.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .liquidGlassRounded()
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(16)
         .frame(maxWidth: landscape ? 620 : .infinity)
@@ -878,54 +915,66 @@ struct CameraScreen: View {
 }
 
 // Use native Liquid Glass on iOS 26, with a visually similar material treatment on older iOS.
+private func fallbackGlass<S: Shape>(_ content: some View, shape: S) -> some View {
+    content
+        .background(.ultraThinMaterial, in: shape)
+        .overlay(shape.stroke(.white.opacity(0.22), lineWidth: 0.8))
+        .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
+}
+
 private struct LiquidGlassCapsuleModifier: ViewModifier {
     func body(content: Content) -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             content.glassEffect(.regular, in: Capsule())
         } else {
-            content
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().stroke(.white.opacity(0.22), lineWidth: 0.8))
-                .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+            fallbackGlass(content, shape: Capsule())
         }
+        #else
+        fallbackGlass(content, shape: Capsule())
+        #endif
     }
 }
 
 private struct LiquidGlassCircleModifier: ViewModifier {
     func body(content: Content) -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             content.glassEffect(.regular, in: Circle())
         } else {
-            content
-                .background(.ultraThinMaterial, in: Circle())
-                .overlay(Circle().stroke(.white.opacity(0.24), lineWidth: 0.8))
-                .shadow(color: .black.opacity(0.2), radius: 10, y: 3)
+            fallbackGlass(content, shape: Circle())
         }
+        #else
+        fallbackGlass(content, shape: Circle())
+        #endif
     }
 }
 
 private struct LiquidGlassRoundedModifier: ViewModifier {
     func body(content: Content) -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         } else {
-            content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.2), lineWidth: 0.8))
+            fallbackGlass(content, shape: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
+        #else
+        fallbackGlass(content, shape: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        #endif
     }
 }
 
 private struct LiquidGlassPanelModifier: ViewModifier {
     func body(content: Content) -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         } else {
-            content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(.white.opacity(0.2), lineWidth: 0.8))
-                .shadow(color: .black.opacity(0.3), radius: 24, y: 10)
+            fallbackGlass(content, shape: RoundedRectangle(cornerRadius: 26, style: .continuous))
         }
+        #else
+        fallbackGlass(content, shape: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        #endif
     }
 }
 
