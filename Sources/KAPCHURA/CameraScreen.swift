@@ -209,10 +209,9 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
         do {
             try device.lockForConfiguration()
             device.activeFormat = chosen
-            // Prefer a less aggressively processed preview/recording path where iOS permits it.
-            device.automaticallyAdjustsVideoHDREnabled = false
-            if device.isVideoHDREnabled { device.isVideoHDREnabled = false }
-            device.automaticallyEnablesLowLightBoostWhenAvailable = false
+            // Avoid optional device-level HDR/low-light controls here.
+            // On some iOS 18 devices these can trigger an internal
+            // AVCaptureDevice.systemPressureState exception during startup.
             let duration = CMTime(value: 1, timescale: CMTimeScale(fps))
             device.activeVideoMinFrameDuration = duration
             device.activeVideoMaxFrameDuration = duration
