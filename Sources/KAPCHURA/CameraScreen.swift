@@ -690,27 +690,12 @@ struct CameraScreen: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                // Apple Music-style live backdrop: fill the whole screen with an
-                // enlarged copy of the camera feed, then soften it behind the viewfinder.
+                // Single clean live camera preview. No blurred duplicate layer.
                 CameraPreview(session: camera.session, stabilization: camera.stabilization)
                     .id(camera.isReady)
                     .frame(width: geometry.size.width, height: geometry.size.height)
                     .clipped()
-                    .blur(radius: 26)
-                    .scaleEffect(1.12)
-                    .overlay(Color.black.opacity(0.12))
                     .ignoresSafeArea()
-
-                // Keep the actual viewfinder crisp and correctly proportioned.
-                CameraPreview(session: camera.session, stabilization: camera.stabilization)
-                    .id(camera.isReady)
-                    .frame(width: fittedWidth, height: fittedHeight)
-                    .clipped()
-                    .overlay {
-                        Rectangle()
-                            .stroke(.white.opacity(0.035), lineWidth: 0.5)
-                    }
-                    .animation(.spring(response: 0.38, dampingFraction: 0.88), value: camera.resolution)
 
                 if gridEnabled {
                     CameraGridOverlay()
