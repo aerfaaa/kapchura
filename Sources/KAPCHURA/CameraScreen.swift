@@ -105,19 +105,25 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             // startRunning can block while AVFoundation prepares the capture graph.
             // Keep that work off the main thread so the UI and dial remain responsive.
             let configuredSession = self.session
-            self.sessionQueue.async {
-                if !configuredSession.isRunning { configuredSession.startRunning() }
-            }
             let rates = self.frameRates(for: device, resolution: self.resolution)
-            Task { @MainActor in
-                self.supportedFrameRates = rates
-                self.rawPixelFormatCount = rawTypes.count
-                self.rawStillAvailable = !rawTypes.isEmpty
-                self.availableFormats = Array(Set(formats)).sorted()
-                self.iso = Double(device.iso)
-                self.focus = Double(device.lensPosition)
-                self.isReady = true
-                self.message = rawTypes.isEmpty ? "Camera ready · RAW still unavailable" : "Camera ready · RAW still supported"
+            self.sessionQueue.async { [weak self] in
+                if !configuredSession.isRunning {
+                    configuredSession.startRunning()
+                }
+                let running = configuredSession.isRunning
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.supportedFrameRates = rates
+                    self.rawPixelFormatCount = rawTypes.count
+                    self.rawStillAvailable = !rawTypes.isEmpty
+                    self.availableFormats = Array(Set(formats)).sorted()
+                    self.iso = Double(device.iso)
+                    self.focus = Double(device.lensPosition)
+                    self.isReady = running
+                    self.message = running
+                        ? (rawTypes.isEmpty ? "Camera ready · RAW still unavailable" : "Camera ready · RAW still supported")
+                        : "Camera session failed to start. Check camera permission and close other camera apps."
+                }
             }
     }
 
@@ -653,6 +659,7 @@ struct CameraScreen: View {
                 // Apple Music-style live backdrop: fill the whole screen with an
                 // enlarged copy of the camera feed, then soften it behind the viewfinder.
                 CameraPreview(session: camera.session, stabilization: camera.stabilization)
+                    .id(camera.isReady)
                     .frame(width: geometry.size.width, height: geometry.size.height)
                     .clipped()
                     .blur(radius: 26)
@@ -662,6 +669,7 @@ struct CameraScreen: View {
 
                 // Keep the actual viewfinder crisp and correctly proportioned.
                 CameraPreview(session: camera.session, stabilization: camera.stabilization)
+                    .id(camera.isReady)
                     .frame(width: fittedWidth, height: fittedHeight)
                     .clipped()
                     .overlay {
