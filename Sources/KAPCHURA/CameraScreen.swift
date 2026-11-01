@@ -288,19 +288,17 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
             stabilizationMessage = "Camera is not ready."
             return
         }
-        if let previewConnection = (nil as AVCaptureConnection?) {
-            _ = previewConnection
-        }
-        if let connection = movieOutput.connection(with: .video) {
-            applyStabilization(to: connection, device: device)
-        } else if value != "Off" {
+        guard let connection = movieOutput.connection(with: .video) else {
+            if value == "Off" {
+                stabilizationMessage = "Stabilisation disabled for preview and next recording."
+                return
+            }
             stabilizationMessage = "Recording connection is not ready."
             return
         }
-        if connection.isVideoStabilizationSupported {
-            let active = connection.preferredVideoStabilizationMode
-            stabilizationMessage = active == .off ? "Stabilisation: Off" : (active == .standard ? "Stabilisation: Standard" : "Stabilisation: Cinematic")
-        }
+        applyStabilization(to: connection, device: device)
+        let active = connection.preferredVideoStabilizationMode
+        stabilizationMessage = active == .off ? "Stabilisation: Off" : (active == .standard ? "Stabilisation: Standard" : "Stabilisation: Cinematic")
     }
 
     func setZoom(_ factor: CGFloat) {
