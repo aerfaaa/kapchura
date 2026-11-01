@@ -514,6 +514,13 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
         // Configure the connection on the main actor before handing recording
         // start/stop operations to the serial capture queue.
         applyStabilization(to: connection, device: device)
+        if let orientation = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first?.interfaceOrientation,
+           let videoOrientation = captureOrientation(for: orientation),
+           connection.isVideoOrientationSupported {
+            connection.videoOrientation = videoOrientation
+        }
         let output = movieOutput
         let destination = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("KAPCHURA-\(UUID().uuidString).mov")
@@ -623,6 +630,16 @@ final class CameraFrameProbe: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     }
 }
 
+private func captureOrientation(for orientation: UIInterfaceOrientation) -> AVCaptureVideoOrientation? {
+    switch orientation {
+    case .portrait: return .portrait
+    case .portraitUpsideDown: return .portraitUpsideDown
+    case .landscapeLeft: return .landscapeLeft
+    case .landscapeRight: return .landscapeRight
+    default: return nil
+    }
+}
+
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
     let stabilization: String
@@ -641,6 +658,12 @@ struct CameraPreview: UIViewRepresentable {
             uiView.previewLayer.session = session
         }
         uiView.previewLayer.videoGravity = .resizeAspectFill
+        if let orientation = uiView.window?.windowScene?.interfaceOrientation,
+           let videoOrientation = captureOrientation(for: orientation),
+           let connection = uiView.previewLayer.connection,
+           connection.isVideoOrientationSupported {
+            connection.videoOrientation = videoOrientation
+        }
         applyPreviewStabilization(uiView.previewLayer.connection)
     }
 
