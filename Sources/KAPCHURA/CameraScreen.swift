@@ -202,6 +202,10 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
         do {
             try device.lockForConfiguration()
             device.activeFormat = chosen
+            // Prefer a less aggressively processed preview/recording path where iOS permits it.
+            device.automaticallyAdjustsVideoHDREnabled = false
+            if device.isVideoHDREnabled { device.isVideoHDREnabled = false }
+            device.automaticallyEnablesLowLightBoostWhenAvailable = false
             let duration = CMTime(value: 1, timescale: CMTimeScale(fps))
             device.activeVideoMinFrameDuration = duration
             device.activeVideoMaxFrameDuration = duration
@@ -249,13 +253,20 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
     }
 
     private func applyStabilization(to connection: AVCaptureConnection, device: AVCaptureDevice) {
-        guard connection.isVideoStabilizationSupported else {
-            stabilizationSupported = false
-            stabilization = "Off"
-            stabilizationMessage = "Stabilisation unsupported by recording connection."
+        // Never let AVFoundation silently re-enable stabilisation when the user chooses Off.
+        connection.automaticallyAdjustsVideoStabilizationWhenAvailable = false
+        if stabilization == "Off" {
+            connection.preferredVideoStabilizationMode = .off
+            stabilizationMessage = "Stabilisation disabled."
             return
         }
-        let requested: AVCaptureVideoStabilizationMode = stabilization == "Maximum" ? .cinematic : (stabilization == "Minimal" ? .standard : .off)
+        guard connection.isVideoStabilizationSupported else {
+            stabilization = "Off"
+            connection.preferredVideoStabilizationMode = .off
+            stabilizationMessage = "Stabilisation unsupported; left fully off."
+            return
+        }
+        let requested: AVCaptureVideoStabilizationMode = stabilization == "Maximum" ? .cinematic : .standard
         let format = device.activeFormat
         let actual: AVCaptureVideoStabilizationMode
         if requested == .off || format.isVideoStabilizationModeSupported(requested) {
@@ -273,11 +284,19 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
 
     func setStabilization(_ value: String) {
         stabilization = value
-        guard let device = activeDevice, let connection = movieOutput.connection(with: .video) else {
+        guard let device = activeDevice else {
+            stabilizationMessage = "Camera is not ready."
+            return
+        }
+        if let previewConnection = (nil as AVCaptureConnection?) {
+            _ = previewConnection
+        }
+        if let connection = movieOutput.connection(with: .video) {
+            applyStabilization(to: connection, device: device)
+        } else if value != "Off" {
             stabilizationMessage = "Recording connection is not ready."
             return
         }
-        applyStabilization(to: connection, device: device)
         if connection.isVideoStabilizationSupported {
             let active = connection.preferredVideoStabilizationMode
             stabilizationMessage = active == .off ? "Stabilisation: Off" : (active == .standard ? "Stabilisation: Standard" : "Stabilisation: Cinematic")
@@ -582,11 +601,15 @@ struct CameraPreview: UIViewRepresentable {
     }
 
     private func applyPreviewStabilization(_ connection: AVCaptureConnection?) {
-        guard let connection, connection.isVideoStabilizationSupported else { return }
+        guard let connection else { return }
+        connection.automaticallyAdjustsVideoStabilizationWhenAvailable = false
         switch stabilization {
-        case "Minimal": connection.preferredVideoStabilizationMode = .standard
-        case "Maximum": connection.preferredVideoStabilizationMode = .cinematic
-        default: connection.preferredVideoStabilizationMode = .off
+        case "Minimal":
+            connection.preferredVideoStabilizationMode = connection.isVideoStabilizationSupported ? .standard : .off
+        case "Maximum":
+            connection.preferredVideoStabilizationMode = connection.isVideoStabilizationSupported ? .cinematic : .off
+        default:
+            connection.preferredVideoStabilizationMode = .off
         }
     }
 }
@@ -598,6 +621,8 @@ final class PreviewView: UIView {
 
 struct CameraScreen: View {
     @StateObject private var camera = CameraEngine()
+    @State private var showQuickSettings = false
+    @State private var gridEnabled = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -616,6 +641,13 @@ struct CameraScreen: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
                     .animation(.spring(response: 0.38, dampingFraction: 0.88), value: camera.resolution)
+
+                if gridEnabled {
+                    CameraGridOverlay()
+                        .padding(.horizontal, 0)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
 
                 VStack(spacing: 0) {
                     statusBar
@@ -643,6 +675,12 @@ struct CameraScreen: View {
         }
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
+        .sheet(isPresented: $showQuickSettings) {
+            quickSettingsSheet
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+                .preferredColorScheme(.dark)
+        }
         .onAppear { camera.settingsCollapsed = true }
     }
 
@@ -680,6 +718,43 @@ struct CameraScreen: View {
             .padding(.horizontal, 11)
             .padding(.vertical, 9)
             .liquidGlassCapsule()
+
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                showQuickSettings = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .liquidGlassCircle()
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Additional camera settings")
+        }
+    }
+
+    private var quickSettingsSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Viewfinder") {
+                    Toggle("Rule of thirds grid", isOn: $gridEnabled)
+                }
+                Section("Image rendering") {
+                    Label("HDR recording is disabled where supported.", systemImage: "sun.max")
+                    Label("Low-light boost is disabled where supported.", systemImage: "moon")
+                    Text("iOS still applies sensor processing, including demosaicing, noise reduction and sharpening. These controls reduce some automatic processing, but cannot turn the iPhone camera into a completely unprocessed sensor feed.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Camera Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showQuickSettings = false }
+                }
+            }
         }
     }
 
@@ -909,6 +984,26 @@ struct CameraScreen: View {
         .disabled(!camera.isReady || camera.recordingBusy)
         .opacity(camera.isReady ? 1 : 0.45)
         .accessibilityLabel(camera.isRecording ? "Stop recording" : "Start recording")
+    }
+}
+
+private struct CameraGridOverlay: View {
+    var body: some View {
+        GeometryReader { geometry in
+            Path { path in
+                let thirdX = geometry.size.width / 3
+                let thirdY = geometry.size.height / 3
+                path.move(to: CGPoint(x: thirdX, y: 0))
+                path.addLine(to: CGPoint(x: thirdX, y: geometry.size.height))
+                path.move(to: CGPoint(x: thirdX * 2, y: 0))
+                path.addLine(to: CGPoint(x: thirdX * 2, y: geometry.size.height))
+                path.move(to: CGPoint(x: 0, y: thirdY))
+                path.addLine(to: CGPoint(x: geometry.size.width, y: thirdY))
+                path.move(to: CGPoint(x: 0, y: thirdY * 2))
+                path.addLine(to: CGPoint(x: geometry.size.width, y: thirdY * 2))
+            }
+            .stroke(.white.opacity(0.58), style: StrokeStyle(lineWidth: 0.7, dash: [5, 4]))
+        }
     }
 }
 
