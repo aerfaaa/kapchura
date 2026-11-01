@@ -579,253 +579,254 @@ struct CameraScreen: View {
     var body: some View {
         GeometryReader { geometry in
             let landscape = geometry.size.width > geometry.size.height
-            let previewAspect: CGFloat = camera.resolution == "Open Gate" ? (3.0 / 4.0) : (9.0 / 16.0)
+            let openGate = camera.resolution == "Open Gate"
+            let previewRatio: CGFloat = landscape
+                ? (openGate ? 4.0 / 3.0 : 16.0 / 9.0)
+                : (openGate ? 3.0 / 4.0 : 9.0 / 16.0)
+
             ZStack {
                 Color.black.ignoresSafeArea()
 
+                // Keep the viewfinder centred and let its visible frame follow the selected ratio.
                 CameraPreview(session: camera.session, stabilization: camera.stabilization)
-                    .aspectRatio(landscape ? (camera.resolution == "Open Gate" ? (4.0 / 3.0) : (16.0 / 9.0)) : previewAspect, contentMode: .fit)
+                    .aspectRatio(previewRatio, contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
-                    .animation(.easeInOut(duration: 0.22), value: camera.resolution)
+                    .animation(.spring(response: 0.38, dampingFraction: 0.88), value: camera.resolution)
 
                 VStack(spacing: 0) {
                     topBar
-                        .padding(.horizontal, 18)
-                        .padding(.top, landscape ? 6 : max(geometry.safeAreaInsets.top, 8) + 8)
-                    Spacer(minLength: 0)
-                    if landscape {
-                        landscapeDock
-                            .frame(maxWidth: .infinity)
-                            .padding(.leading, max(geometry.safeAreaInsets.leading, 34))
-                            .padding(.trailing, max(geometry.safeAreaInsets.trailing, 34))
-                    } else {
-                        nativeBottomControls
+                        .padding(.horizontal, landscape ? 24 : 20)
+                        .padding(.top, max(geometry.safeAreaInsets.top, landscape ? 8 : 12) + 6)
+
+                    Spacer(minLength: 12)
+
+                    if !camera.settingsCollapsed {
+                        settingsPanel(landscape: landscape)
+                            .padding(.horizontal, landscape ? 70 : 14)
+                            .padding(.bottom, 14)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
+
+                    bottomCameraBar(landscape: landscape)
+                        .padding(.horizontal, landscape ? 24 : 20)
+                        .padding(.bottom, max(geometry.safeAreaInsets.bottom, 8) + (landscape ? 4 : 8))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea(edges: .bottom)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
+            .ignoresSafeArea(edges: landscape ? [.bottom, .leading, .trailing] : [.bottom])
             .background(Color.black)
         }
         .preferredColorScheme(.dark)
+        .statusBarHidden(true)
+        .onAppear { camera.settingsCollapsed = true }
     }
 
     private var topBar: some View {
-        HStack(alignment: .center, spacing: 14) {
-            Text(camera.resolution == "Open Gate" ? "4:3" : "16:9")
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(.black.opacity(0.35), in: Capsule())
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "camera.aperture")
+                    .font(.system(size: 18, weight: .medium))
+                Text("KAPCHURA")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .tracking(1.7)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 15)
+            .padding(.vertical, 11)
+            .liquidGlassCapsule()
 
             Spacer()
 
-            HStack(spacing: 6) {
+            HStack(spacing: 7) {
                 Circle()
-                    .fill(camera.isRecording ? Color.red : Color.white.opacity(0.45))
+                    .fill(camera.isRecording ? Color.red : Color.white.opacity(0.72))
                     .frame(width: 6, height: 6)
-                Text(camera.isRecording ? "REC" : "STANDBY")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .tracking(1.2)
+                Text(camera.isRecording ? "REC" : camera.profileStatus)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
             }
-            .foregroundStyle(.white.opacity(0.9))
-
-            Text(camera.rawStillAvailable ? "RAW" : "HEVC")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .tracking(0.8)
-                .foregroundStyle(camera.rawStillAvailable ? .white : .white.opacity(0.65))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(.black.opacity(0.38), in: Capsule())
-                .overlay(Capsule().stroke(.white.opacity(0.25), lineWidth: 0.7))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 11)
+            .liquidGlassCapsule()
         }
     }
 
-    private func lensPill(_ title: String, selected: Bool) -> some View {
-        Text(title)
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
-            .foregroundStyle(selected ? .black : .white)
-            .frame(width: 42, height: 34)
-            .background(selected ? Color.white : Color.black.opacity(0.38), in: Capsule())
-            .overlay(Capsule().stroke(.white.opacity(selected ? 0 : 0.35), lineWidth: 0.7))
+    private func bottomCameraBar(landscape: Bool) -> some View {
+        HStack(alignment: .center, spacing: 0) {
+            // The shutter stays visually centred regardless of the arrow's width.
+            Color.clear
+                .frame(width: 54, height: 54)
+
+            Spacer(minLength: 0)
+
+            recordButton
+
+            Spacer(minLength: 0)
+
+            Button {
+                withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
+                    camera.settingsCollapsed.toggle()
+                }
+            } label: {
+                Image(systemName: camera.settingsCollapsed ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 48, height: 48)
+                    .contentShape(Circle())
+                    .liquidGlassCircle()
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(camera.settingsCollapsed ? "Show camera settings" : "Hide camera settings")
+        }
+        .padding(.horizontal, landscape ? 18 : 16)
+        .padding(.vertical, 10)
+        .frame(maxWidth: landscape ? 440 : .infinity)
+        .frame(maxWidth: .infinity)
+        .background {
+            // Floating glass dock, not a full-width opaque black slab.
+            Capsule()
+                .fill(.ultraThinMaterial.opacity(0.72))
+                .overlay(Capsule().stroke(.white.opacity(0.17), lineWidth: 0.8))
+                .shadow(color: .black.opacity(0.25), radius: 18, y: 7)
+                .padding(.horizontal, landscape ? 0 : 2)
+        }
     }
 
-    private var nativeBottomControls: some View {
-        VStack(spacing: 10) {
-            if !camera.settingsCollapsed {
-                HStack(spacing: 14) {
-                    Text("FORMAT").font(.system(size: 10, weight: .semibold, design: .rounded)).foregroundStyle(.white.opacity(0.65))
-                    Picker("Format", selection: Binding(get: { camera.resolution }, set: { camera.setResolution($0) })) {
-                        Text("1080p").tag("1080p")
-                        Text("4K").tag("4K")
-                        Text("Open Gate").tag("Open Gate")
+    private func settingsPanel(landscape: Bool) -> some View {
+        VStack(spacing: 14) {
+            HStack {
+                Text("CAMERA SETTINGS")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .tracking(1.5)
+                    .foregroundStyle(.white.opacity(0.66))
+                Spacer()
+                Button("Done") {
+                    withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
+                        camera.settingsCollapsed = true
                     }
-                    .pickerStyle(.segmented)
-                    .disabled(camera.isRecording)
-                    Picker("FPS", selection: Binding(get: { camera.frameRate }, set: { camera.setFrameRate($0) })) {
-                        ForEach(camera.supportedFrameRates, id: \.self) { Text("\($0)").tag($0) }
-                    }
-                    .pickerStyle(.menu)
-                    .tint(.white)
-                    .disabled(camera.isRecording || camera.supportedFrameRates.isEmpty)
-                    Picker("Stabilisation", selection: Binding(get: { camera.stabilization }, set: { camera.setStabilization($0) })) {
-                        Text("Off").tag("Off")
-                        Text("Minimal").tag("Minimal")
-                        Text("Maximum").tag("Maximum")
-                    }
-                    .pickerStyle(.menu)
-                    .tint(.white)
-                    .disabled(camera.isRecording)
                 }
-                .font(.system(size: 11, weight: .medium))
-                .padding(.horizontal, 16)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+            }
 
+            HStack(spacing: 8) {
+                settingChip("1080p", selected: camera.resolution == "1080p") { camera.setResolution("1080p") }
+                settingChip("4K", selected: camera.resolution == "4K") { camera.setResolution("4K") }
+                settingChip("OPEN GATE", selected: camera.resolution == "Open Gate") { camera.setResolution("Open Gate") }
+
+                Menu {
+                    ForEach(camera.supportedFrameRates, id: \.self) { rate in
+                        Button("\(rate) FPS") { camera.setFrameRate(rate) }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Text("\(camera.frameRate) FPS")
+                        Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .liquidGlassCapsule()
+                }
+                .disabled(camera.isRecording || camera.supportedFrameRates.isEmpty)
+            }
+
+            HStack(spacing: 10) {
+                Menu {
+                    Button("Off") { camera.setStabilization("Off") }
+                    Button("Minimal") { camera.setStabilization("Minimal") }
+                    Button("Maximum") { camera.setStabilization("Maximum") }
+                } label: {
+                    settingMenuLabel("STABILISATION", value: camera.stabilization)
+                }
+                .disabled(camera.isRecording)
+
+                Menu {
+                    Button("1× Wide") { camera.switchLens(telephoto: false) }
+                    Button("2× Telephoto") { camera.switchLens(telephoto: true) }
+                } label: {
+                    settingMenuLabel("LENS", value: camera.isTelephoto ? "2× Tele" : "1× Wide")
+                }
+            }
+
+            if landscape {
                 HStack(spacing: 12) {
                     sliderRow("ISO", value: $camera.iso, range: 25...1600, valueText: String(Int(camera.iso)), automatic: camera.isoAutomatic, autoAction: { camera.setExposureAutomatic() }) { camera.setISO($0) }
                     sliderRow("FOCUS", value: $camera.focus, range: 0...1, valueText: String(format: "%.2f", camera.focus), automatic: camera.focusAutomatic, autoAction: { camera.setAutofocus() }) { camera.setManualFocus(Float($0)) }
                 }
-                .padding(.horizontal, 16)
-            }
-
-            HStack(alignment: .center, spacing: 0) {
-                Button { camera.captureRAWPhoto() } label: {
-                    Image(systemName: "camera")
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(camera.rawStillAvailable && !camera.isRecording ? .white : .white.opacity(0.3))
-                        .frame(width: 54, height: 54)
+                HStack(spacing: 12) {
+                    sliderRow("SHUTTER", value: $camera.shutter, range: 1.0/1000...1.0/15, valueText: "1/\(Int(1 / max(camera.shutter, 0.001)))", automatic: camera.shutterAutomatic, autoAction: { camera.setExposureAutomatic() }) { camera.setShutter($0) }
+                    sliderRow("WHITE BAL.", value: $camera.temperature, range: 2500...8000, valueText: "\(Int(camera.temperature))K", automatic: camera.whiteBalanceAutomatic, autoAction: { camera.setWhiteBalanceAutomatic() }) { camera.setWhiteBalance($0) }
                 }
-                .disabled(!camera.isReady || !camera.rawStillAvailable || camera.isRecording)
-
-                Spacer()
-
-                Button { camera.switchLens(telephoto: false) } label: { zoomChoice("1×", selected: !camera.isTelephoto) }
-                    .disabled(!camera.isReady)
-                Button { camera.switchLens(telephoto: true) } label: { zoomChoice("2×", selected: camera.isTelephoto) }
-                    .disabled(!camera.isReady)
-
-                Spacer()
-
-                recordButton
-
-                Spacer()
-
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { camera.settingsCollapsed.toggle() }
-                } label: {
-                    Image(systemName: camera.settingsCollapsed ? "slider.horizontal.3" : "chevron.down")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(.white)
-                        .frame(width: 54, height: 54)
+            } else {
+                VStack(spacing: 10) {
+                    sliderRow("ISO", value: $camera.iso, range: 25...1600, valueText: String(Int(camera.iso)), automatic: camera.isoAutomatic, autoAction: { camera.setExposureAutomatic() }) { camera.setISO($0) }
+                    sliderRow("SHUTTER", value: $camera.shutter, range: 1.0/1000...1.0/15, valueText: "1/\(Int(1 / max(camera.shutter, 0.001)))", automatic: camera.shutterAutomatic, autoAction: { camera.setExposureAutomatic() }) { camera.setShutter($0) }
+                    sliderRow("FOCUS", value: $camera.focus, range: 0...1, valueText: String(format: "%.2f", camera.focus), automatic: camera.focusAutomatic, autoAction: { camera.setAutofocus() }) { camera.setManualFocus(Float($0)) }
+                    sliderRow("WHITE BAL.", value: $camera.temperature, range: 2500...8000, valueText: "\(Int(camera.temperature))K", automatic: camera.whiteBalanceAutomatic, autoAction: { camera.setWhiteBalanceAutomatic() }) { camera.setWhiteBalance($0) }
                 }
             }
-            .padding(.horizontal, 22)
 
-            Text(camera.isRecording ? "RECORDING" : camera.message)
-                .font(.system(size: 10, weight: .medium, design: .rounded))
-                .foregroundStyle(camera.isRecording ? .red : .white.opacity(0.65))
-                .lineLimit(1)
-                .frame(maxWidth: .infinity)
-                .padding(.bottom, 8)
+            Text(camera.stabilizationMessage.isEmpty ? camera.message : camera.stabilizationMessage)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.58))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.top, 12)
-        .background {
-            Rectangle().fill(Color.black.opacity(0.98)).ignoresSafeArea(edges: .bottom)
-        }
+        .padding(16)
+        .frame(maxWidth: landscape ? 620 : .infinity)
+        .liquidGlassPanel()
     }
 
-    private func zoomChoice(_ title: String, selected: Bool) -> some View {
-        Text(title)
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .foregroundStyle(selected ? .black : .white)
-            .frame(width: 42, height: 34)
-            .background(selected ? Color.white : Color.white.opacity(0.12), in: Capsule())
-    }
-
-    private var landscapeDock: some View {
-        HStack(spacing: 8) {
-            VStack(spacing: 4) {
-                Picker("Format", selection: Binding(get: { camera.resolution }, set: { camera.setResolution($0) })) {
-                    Text("1080").tag("1080p")
-                    Text("4K").tag("4K")
-                    Text("OPEN").tag("Open Gate")
-                }.pickerStyle(.segmented).disabled(camera.isRecording)
-                HStack(spacing: 3) {
-                    Picker("FPS", selection: Binding(get: { camera.frameRate }, set: { camera.setFrameRate($0) })) {
-                        ForEach(camera.supportedFrameRates, id: \.self) { Text("\($0)").tag($0) }
-                    }.pickerStyle(.segmented).disabled(camera.isRecording)
-                    Picker("Stabilisation", selection: Binding(get: { camera.stabilization }, set: { camera.setStabilization($0) })) {
-                        Text("OFF").tag("Off")
-                        Text("MIN").tag("Minimal")
-                        Text("MAX").tag("Maximum")
-                    }.pickerStyle(.menu).tint(.white).disabled(camera.isRecording)
+    private func settingChip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .tracking(0.3)
+                .foregroundStyle(selected ? .black : .white)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 10)
+                .background {
+                    Capsule().fill(selected ? Color.white : Color.white.opacity(0.08))
                 }
-            }
-            VStack(spacing: 2) {
-                compactSlider("ISO", value: $camera.iso, range: 25...1600) { camera.setISO($0) }
-                compactSlider("SHUT", value: $camera.shutter, range: 1.0/1000...1.0/15) { camera.setShutter($0) }
-            }
-            VStack(spacing: 2) {
-                compactSlider("FOCUS", value: $camera.focus, range: 0...1) { camera.setManualFocus(Float($0)) }
-                compactSlider("WB", value: $camera.temperature, range: 2500...8000) { camera.setWhiteBalance($0) }
-            }
-            recordButton.scaleEffect(0.68).frame(width: 54, height: 54)
+                .overlay(Capsule().stroke(.white.opacity(selected ? 0 : 0.18), lineWidth: 0.7))
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background {
-            Rectangle().fill(Color.black.opacity(0.96))
-                .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.16)).frame(height: 0.6) }
-                .ignoresSafeArea(edges: .bottom)
-        }
+        .buttonStyle(.plain)
+        .disabled(camera.isRecording)
     }
 
-    private func compactSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>,
-                               changed: @escaping (Double) -> Void) -> some View {
-        HStack(spacing: 3) {
-            Text(title).font(.system(size: 7, weight: .semibold, design: .monospaced)).frame(width: 40, alignment: .leading)
-            Slider(value: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0; changed($0) }), in: range).tint(.white)
-        }
-        .foregroundStyle(.white.opacity(0.9))
-        .frame(maxWidth: .infinity)
-    }
-
-    private var profilePickerRow: some View {
-        VStack(spacing: 7) {
-            HStack(spacing: 7) {
-                Text("FORMAT").font(.system(size: 9, weight: .semibold, design: .monospaced)).foregroundStyle(.white.opacity(0.65)).frame(width: 58, alignment: .leading)
-                Picker("Resolution", selection: Binding(get: { camera.resolution }, set: { camera.setResolution($0) })) {
-                    Text("1080p").tag("1080p")
-                    Text("4K").tag("4K")
-                    Text("OPEN GATE").tag("Open Gate")
-                }.pickerStyle(.segmented).disabled(camera.isRecording)
+    private func settingMenuLabel(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .tracking(1.1)
+                .foregroundStyle(.white.opacity(0.52))
+            HStack(spacing: 6) {
+                Text(value).font(.system(size: 12, weight: .semibold))
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
             }
-            HStack(spacing: 7) {
-                Text("FPS").font(.system(size: 9, weight: .semibold, design: .monospaced)).foregroundStyle(.white.opacity(0.65)).frame(width: 58, alignment: .leading)
-                Picker("FPS", selection: Binding(get: { camera.frameRate }, set: { camera.setFrameRate($0) })) {
-                    ForEach(camera.supportedFrameRates, id: \.self) { Text("\($0)").tag($0) }
-                }.pickerStyle(.segmented).disabled(camera.isRecording || camera.supportedFrameRates.isEmpty)
-                Text("STAB").font(.system(size: 9, weight: .semibold, design: .monospaced)).foregroundStyle(.white.opacity(0.65))
-                Picker("Stabilization", selection: Binding(get: { camera.stabilization }, set: { camera.setStabilization($0) })) {
-                    Text("OFF").tag("Off")
-                    Text("MIN").tag("Minimal")
-                    Text("MAX").tag("Maximum")
-                }.pickerStyle(.menu).tint(.white).disabled(camera.isRecording)
-            }
+            .foregroundStyle(.white)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .liquidGlassRounded()
     }
 
     private func sliderRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>,
                            valueText: String, automatic: Bool, autoAction: @escaping () -> Void,
                            changed: @escaping (Double) -> Void) -> some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 7) {
             Text(title)
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .tracking(0.8)
-                .foregroundStyle(.white.opacity(0.7))
-                .frame(width: 58, alignment: .leading)
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .tracking(0.5)
+                .foregroundStyle(.white.opacity(0.65))
+                .frame(width: 65, alignment: .leading)
             Slider(value: Binding(
                 get: { value.wrappedValue },
                 set: { newValue in
@@ -834,15 +835,20 @@ struct CameraScreen: View {
                 }
             ), in: range)
             .tint(.white)
-            Text(valueText).font(.system(size: 9, weight: .medium, design: .monospaced)).foregroundStyle(.white).frame(width: 45, alignment: .trailing)
-            Button("A", action: autoAction)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(automatic ? .black : .white)
-                .frame(width: 22, height: 22)
-                .background(automatic ? Color.white : Color.white.opacity(0.12), in: Circle())
-                .buttonStyle(.plain)
+            Text(valueText)
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white)
+                .frame(width: 42, alignment: .trailing)
+            Button(action: autoAction) {
+                Text("A")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(automatic ? .black : .white)
+                    .frame(width: 22, height: 22)
+                    .background(automatic ? Color.white : Color.white.opacity(0.12), in: Circle())
+            }
+            .buttonStyle(.plain)
         }
-        .frame(height: 26)
+        .frame(height: 28)
     }
 
     private var recordButton: some View {
@@ -851,19 +857,82 @@ struct CameraScreen: View {
         } label: {
             ZStack {
                 Circle()
-                    .stroke(.white.opacity(0.95), lineWidth: 2)
-                    .frame(width: 68, height: 68)
+                    .fill(.ultraThinMaterial)
+                    .frame(width: 78, height: 78)
+                Circle()
+                    .stroke(.white.opacity(0.95), lineWidth: 2.2)
+                    .frame(width: 66, height: 66)
                 RoundedRectangle(cornerRadius: camera.isRecording ? 5 : 30)
                     .fill(.red)
-                    .frame(width: camera.isRecording ? 25 : 54,
-                           height: camera.isRecording ? 25 : 54)
-                    .animation(.easeInOut(duration: 0.18), value: camera.isRecording)
+                    .frame(width: camera.isRecording ? 24 : 52,
+                           height: camera.isRecording ? 24 : 52)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.78), value: camera.isRecording)
             }
-            .frame(width: 72, height: 72)
+            .frame(width: 82, height: 82)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .disabled(!camera.isReady || camera.recordingBusy)
         .opacity(camera.isReady ? 1 : 0.45)
+        .accessibilityLabel(camera.isRecording ? "Stop recording" : "Start recording")
     }
+}
+
+// Use native Liquid Glass on iOS 26, with a visually similar material treatment on older iOS.
+private struct LiquidGlassCapsuleModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: Capsule())
+        } else {
+            content
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(0.22), lineWidth: 0.8))
+                .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+        }
+    }
+}
+
+private struct LiquidGlassCircleModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: Circle())
+        } else {
+            content
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(Circle().stroke(.white.opacity(0.24), lineWidth: 0.8))
+                .shadow(color: .black.opacity(0.2), radius: 10, y: 3)
+        }
+    }
+}
+
+private struct LiquidGlassRoundedModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        } else {
+            content
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.2), lineWidth: 0.8))
+        }
+    }
+}
+
+private struct LiquidGlassPanelModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        } else {
+            content
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(.white.opacity(0.2), lineWidth: 0.8))
+                .shadow(color: .black.opacity(0.3), radius: 24, y: 10)
+        }
+    }
+}
+
+private extension View {
+    func liquidGlassCapsule() -> some View { modifier(LiquidGlassCapsuleModifier()) }
+    func liquidGlassCircle() -> some View { modifier(LiquidGlassCircleModifier()) }
+    func liquidGlassRounded() -> some View { modifier(LiquidGlassRoundedModifier()) }
+    func liquidGlassPanel() -> some View { modifier(LiquidGlassPanelModifier()) }
 }
