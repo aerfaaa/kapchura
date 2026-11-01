@@ -53,12 +53,20 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
                 Task { @MainActor in self.message = "Camera permission is required." }
                 return
             }
-            AVCaptureDevice.requestAccess(for: .audio) { _ in self.configureSession() }
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
+                // AVFoundation invokes permission callbacks on an arbitrary queue.
+                // CameraEngine is MainActor-isolated, so hop back before touching it.
+                Task { @MainActor in
+                    self?.configureSession()
+                }
+            }
         }
     }
 
     private func configureSession() {
-        sessionQueue.async {
+        // Keep all CameraEngine state and helper access on MainActor.
+        // The previous implementation entered sessionQueue and then called
+        // MainActor-isolated methods/properties from that background queue.
             self.session.beginConfiguration()
             self.session.sessionPreset = .inputPriority
             let discovery = AVCaptureDevice.DiscoverySession(
@@ -106,7 +114,6 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
                 self.isReady = true
                 self.message = rawTypes.isEmpty ? "Camera ready · RAW still unavailable" : "Camera ready · RAW still supported"
             }
-        }
     }
 
     func switchLens(telephoto: Bool) {
