@@ -60,13 +60,9 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
                 Task { @MainActor in self.message = "Camera permission is required." }
                 return
             }
-            AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
-                // AVFoundation invokes permission callbacks on an arbitrary queue.
-                // CameraEngine is MainActor-isolated, so hop back before touching it.
-                Task { @MainActor in
-                    self?.configureSession()
-                }
-            }
+            // Camera preview must not wait for microphone permission.
+            AVCaptureDevice.requestAccess(for: .audio) { _ in }
+            Task { @MainActor in self.configureSession() }
         }
     }
 
@@ -690,12 +686,14 @@ struct CameraScreen: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                // Single clean live camera preview. No blurred duplicate layer.
+                // Match the live viewfinder to the selected recording aspect ratio.
+                Color.black.ignoresSafeArea()
                 CameraPreview(session: camera.session, stabilization: camera.stabilization)
                     .id(camera.isReady)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .frame(width: fittedWidth, height: fittedHeight)
                     .clipped()
-                    .ignoresSafeArea()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .animation(.spring(response: 0.32, dampingFraction: 0.88), value: camera.resolution)
 
                 if gridEnabled {
                     CameraGridOverlay()
@@ -840,51 +838,83 @@ struct CameraScreen: View {
     private func bottomCameraBar(landscape: Bool) -> some View {
         Group {
             if landscape {
-                VStack(spacing: 14) {
+                VStack(spacing: 10) {
                     recordButton
+                    featureIconStrip(landscape: true)
                     Button {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
-                            camera.settingsCollapsed.toggle()
-                        }
+                        withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) { camera.settingsCollapsed.toggle() }
                     } label: {
                         Image(systemName: camera.settingsCollapsed ? "chevron.left" : "chevron.right")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 42, height: 42)
-                            .contentShape(Circle())
-                            .liquidGlassCircle()
+                            .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                            .frame(width: 38, height: 38).liquidGlassCircle()
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(camera.settingsCollapsed ? "Show camera settings" : "Hide camera settings")
                 }
-                .padding(.vertical, 14)
+                .padding(.vertical, 12)
             } else {
-                HStack(alignment: .center, spacing: 0) {
-                    Color.clear.frame(width: 54, height: 54)
-                    Spacer(minLength: 0)
-                    recordButton
-                    Spacer(minLength: 0)
-                    Button {
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
-                            camera.settingsCollapsed.toggle()
+                VStack(spacing: 10) {
+                    featureIconStrip(landscape: false)
+                    HStack(alignment: .center, spacing: 0) {
+                        Color.clear.frame(width: 44, height: 54)
+                        Spacer(minLength: 0)
+                        recordButton
+                        Spacer(minLength: 0)
+                        Button {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) { camera.settingsCollapsed.toggle() }
+                        } label: {
+                            Image(systemName: camera.settingsCollapsed ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                                .frame(width: 40, height: 40).liquidGlassCircle()
                         }
-                    } label: {
-                        Image(systemName: camera.settingsCollapsed ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Circle())
-                            .liquidGlassCircle()
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(camera.settingsCollapsed ? "Show camera settings" : "Hide camera settings")
+                    .padding(.horizontal, 14).frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 16)
-                .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    private func featureIconStrip(landscape: Bool) -> some View {
+        let items: [(String, String)] = [
+            ("aspectratio", "Format"), ("speedometer", "Frame rate"), ("camera.aperture", "Stabilisation"),
+            ("camera.macro", "Lens"), ("sun.max", "Exposure"), ("viewfinder", "Focus"),
+            ("thermometer.medium", "White balance"), ("square.grid.3x3", "Grid")
+        ]
+        return Group {
+            if landscape {
+                VStack(spacing: 7) { ForEach(items, id: \.1) { item in featureIcon(item.0, label: item.1) } }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) { ForEach(items, id: \.1) { item in featureIcon(item.0, label: item.1) } }
+                        .padding(.horizontal, 2)
+                }
+            }
+        }
+        .padding(7)
+        .background(Color.black.opacity(0.48), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.14), lineWidth: 0.7))
+    }
+
+    private func featureIcon(_ symbol: String, label: String) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            if label == "Grid" {
+                withAnimation(.easeInOut(duration: 0.18)) { gridEnabled.toggle() }
+            } else {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { camera.settingsCollapsed = false }
+            }
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(label == "Grid" && gridEnabled ? .black : .white)
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(label == "Grid" && gridEnabled ? Color.white : Color.white.opacity(0.09)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
     private func settingsPanel(landscape: Bool) -> some View {
@@ -1167,7 +1197,7 @@ private struct TactileDial: View {
                         }
                         guard let start = dragStartValue else { return }
                         let sensitivity = (range.upperBound - range.lowerBound) / 10
-                        visualOffset = -gesture.translation.width.truncatingRemainder(dividingBy: 8)
+                        visualOffset = gesture.translation.width
                         let raw = start + Double(gesture.translation.width / max(width, 1)) * sensitivity
                         let snapped = min(max((raw / step).rounded() * step, range.lowerBound), range.upperBound)
                         guard snapped != value else { return }
@@ -1183,7 +1213,7 @@ private struct TactileDial: View {
                     .onEnded { _ in
                         dragStartValue = nil
                         lastHapticStep = Int.min
-                        withAnimation(.easeOut(duration: 0.12)) { visualOffset = 0 }
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { visualOffset = 0 }
                     }
             )
             .accessibilityElement()
