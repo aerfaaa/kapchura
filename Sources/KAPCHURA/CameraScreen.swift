@@ -514,13 +514,8 @@ final class CameraEngine: NSObject, ObservableObject, AVCaptureFileOutputRecordi
         // Configure the connection on the main actor before handing recording
         // start/stop operations to the serial capture queue.
         applyStabilization(to: connection, device: device)
-        if let orientation = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first?.interfaceOrientation,
-           let videoOrientation = captureOrientation(for: orientation),
-           connection.isVideoOrientationSupported {
-            connection.videoOrientation = videoOrientation
-        }
+        // Keep capture orientation fixed in portrait even when the interface rotates.
+        if connection.isVideoOrientationSupported { connection.videoOrientation = .portrait }
         let output = movieOutput
         let destination = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("KAPCHURA-\(UUID().uuidString).mov")
@@ -658,11 +653,8 @@ struct CameraPreview: UIViewRepresentable {
             uiView.previewLayer.session = session
         }
         uiView.previewLayer.videoGravity = .resizeAspectFill
-        if let orientation = uiView.window?.windowScene?.interfaceOrientation,
-           let videoOrientation = captureOrientation(for: orientation),
-           let connection = uiView.previewLayer.connection,
-           connection.isVideoOrientationSupported {
-            connection.videoOrientation = videoOrientation
+        if let connection = uiView.previewLayer.connection, connection.isVideoOrientationSupported {
+            connection.videoOrientation = .portrait
         }
         applyPreviewStabilization(uiView.previewLayer.connection)
     }
@@ -687,16 +679,15 @@ final class PreviewView: UIView {
 
 struct CameraScreen: View {
     @StateObject private var camera = CameraEngine()
-    @State private var showQuickSettings = false
+    @State private var selectedFeature: String? = nil
     @State private var gridEnabled = false
 
     var body: some View {
         GeometryReader { geometry in
             let landscape = geometry.size.width > geometry.size.height
             let openGate = camera.resolution == "Open Gate"
-            let previewRatio: CGFloat = landscape
-                ? (openGate ? 4.0 / 3.0 : 16.0 / 9.0)
-                : (openGate ? 3.0 / 4.0 : 9.0 / 16.0)
+            // Capture stays portrait-locked; rotating the UI never rotates the camera feed.
+            let previewRatio: CGFloat = openGate ? 3.0 / 4.0 : 9.0 / 16.0
 
             let screenRatio = geometry.size.width / max(geometry.size.height, 1)
             let fittedWidth = screenRatio > previewRatio
@@ -724,52 +715,25 @@ struct CameraScreen: View {
                         .transition(.opacity)
                 }
 
-                if landscape {
-                    // Landscape gets a genuinely different control layout:
-                    // status at the upper-left, shutter/settings dock on the right.
-                    HStack(alignment: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    HStack {
                         statusBar
-                            .padding(.leading, 18)
-                            .padding(.top, 7)
-
-                        Spacer(minLength: 12)
-
-                        VStack(spacing: 0) {
-                            Spacer(minLength: 0)
-                            if !camera.settingsCollapsed {
-                                settingsPanel(landscape: true)
-                                    .frame(maxWidth: 300)
-                                    .padding(.bottom, 12)
-                                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                            }
-                            bottomCameraBar(landscape: true)
-                                .padding(.trailing, 12)
-                                .padding(.bottom, 10)
-                        }
-                        .frame(width: camera.settingsCollapsed ? 86 : 320)
+                        Spacer()
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    VStack(spacing: 0) {
-                        statusBar
-                            .padding(.horizontal, 20)
-                            .padding(.top, max(geometry.safeAreaInsets.top, 10) + 2)
-
-                        Spacer(minLength: 12)
-
-                        if !camera.settingsCollapsed {
-                            settingsPanel(landscape: false)
-                                .padding(.horizontal, 14)
-                                .padding(.bottom, 8)
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
-
-                        bottomCameraBar(landscape: false)
-                            .padding(.horizontal, 20)
-                            .padding(.bottom, max(geometry.safeAreaInsets.bottom, 8) + 8)
+                    .padding(.horizontal, landscape ? 18 : 20)
+                    .padding(.top, max(geometry.safeAreaInsets.top, 8) + 2)
+                    Spacer(minLength: 0)
+                    if let selectedFeature {
+                        settingsPanel(feature: selectedFeature, landscape: landscape)
+                            .padding(.horizontal, landscape ? 18 : 14)
+                            .padding(.bottom, 10)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    bottomCameraBar(landscape: landscape)
+                        .padding(.horizontal, landscape ? 18 : 14)
+                        .padding(.bottom, max(geometry.safeAreaInsets.bottom, 6) + 8)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .ignoresSafeArea()
@@ -900,144 +864,127 @@ struct CameraScreen: View {
         }
     }
 
-    private func featureIconStrip(landscape: Bool) -> some View {
-        let items: [(String, String)] = [
-            ("aspectratio", "Format"), ("speedometer", "Frame rate"), ("camera.aperture", "Stabilisation"),
-            ("camera.macro", "Lens"), ("sun.max", "Exposure"), ("viewfinder", "Focus"),
-            ("thermometer.medium", "White balance"), ("square.grid.3x3", "Grid")
-        ]
-        return Group {
-            if landscape {
-                VStack(spacing: 7) { ForEach(items, id: \.1) { item in featureIcon(item.0, label: item.1) } }
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) { ForEach(items, id: \.1) { item in featureIcon(item.0, label: item.1) } }
-                        .padding(.horizontal, 2)
+    private let featureItems: [(symbol: String, title: String)] = [
+        ("aspectratio", "Format"), ("speedometer", "FPS"), ("camera.aperture", "Stabilisation"),
+        ("camera.macro", "Lens"), ("sun.max", "Exposure"), ("viewfinder", "Focus"),
+        ("thermometer.medium", "White Balance"), ("square.grid.3x3", "Grid")
+    ]
+
+    private func bottomCameraBar(landscape: Bool) -> some View {
+        HStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 9) {
+                    ForEach(featureItems, id: \.title) { item in featureIcon(item.symbol, label: item.title) }
                 }
+                .padding(.horizontal, 3)
             }
+            .frame(maxWidth: .infinity)
+            recordButton.padding(.leading, landscape ? 18 : 12)
         }
-        .padding(7)
-        .background(Color.black.opacity(0.48), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.14), lineWidth: 0.7))
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(.white.opacity(0.16), lineWidth: 0.8))
     }
 
     private func featureIcon(_ symbol: String, label: String) -> some View {
-        Button {
+        let selected = selectedFeature == label
+        let active = label == "Grid" && gridEnabled
+        return Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             if label == "Grid" {
-                withAnimation(.easeInOut(duration: 0.18)) { gridEnabled.toggle() }
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { gridEnabled.toggle() }
             } else {
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { camera.settingsCollapsed = false }
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.84)) {
+                    selectedFeature = selected ? nil : label
+                }
             }
         } label: {
-            Image(systemName: symbol)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(label == "Grid" && gridEnabled ? .black : .white)
-                .frame(width: 36, height: 36)
-                .background(Circle().fill(label == "Grid" && gridEnabled ? Color.white : Color.white.opacity(0.09)))
+            VStack(spacing: 4) {
+                Image(systemName: symbol)
+                    .font(.system(size: 16, weight: selected || active ? .bold : .medium))
+                    .frame(width: 40, height: 34)
+                    .foregroundStyle(selected || active ? .black : .white.opacity(0.92))
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(selected || active ? Color.white : Color.white.opacity(0.085)))
+                Text(label == "White Balance" ? "WB" : label.uppercased())
+                    .font(.system(size: 8, weight: .semibold))
+                    .tracking(0.35)
+                    .foregroundStyle(.white.opacity(selected || active ? 1 : 0.62))
+                    .lineLimit(1)
+            }
+            .frame(minWidth: 46)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
     }
 
-    private func settingsPanel(landscape: Bool) -> some View {
-        VStack(spacing: 14) {
+    private func settingsPanel(feature: String, landscape: Bool) -> some View {
+        VStack(spacing: 12) {
             HStack {
-                Text("CAMERA SETTINGS")
+                Text(feature.uppercased())
                     .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .tracking(1.5)
-                    .foregroundStyle(.white.opacity(0.66))
+                    .tracking(1.4)
+                    .foregroundStyle(.white.opacity(0.68))
                 Spacer()
-                Button("Done") {
-                    withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
-                        camera.settingsCollapsed = true
-                    }
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { selectedFeature = nil }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .frame(width: 28, height: 28)
+                        .background(.white.opacity(0.1), in: Circle())
                 }
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
+                .buttonStyle(.plain)
             }
-
-            HStack(spacing: 8) {
-                settingChip("1080p", selected: camera.resolution == "1080p") { camera.setResolution("1080p") }
-                settingChip("4K", selected: camera.resolution == "4K") { camera.setResolution("4K") }
-                settingChip("OPEN GATE", selected: camera.resolution == "Open Gate") { camera.setResolution("Open Gate") }
-
-                Menu {
+            if feature == "Format" {
+                HStack(spacing: 8) {
+                    settingChip("1080p", selected: camera.resolution == "1080p") { camera.setResolution("1080p") }
+                    settingChip("4K", selected: camera.resolution == "4K") { camera.setResolution("4K") }
+                    settingChip("OPEN GATE", selected: camera.resolution == "Open Gate") { camera.setResolution("Open Gate") }
+                }
+            } else if feature == "FPS" {
+                HStack(spacing: 8) {
                     ForEach(camera.supportedFrameRates, id: \.self) { rate in
-                        Button("\(rate) FPS") { camera.setFrameRate(rate) }
+                        settingChip("\(rate) FPS", selected: camera.frameRate == rate) { camera.setFrameRate(rate) }
                     }
-                } label: {
-                    HStack(spacing: 5) {
-                        Text("\(camera.frameRate) FPS")
-                        Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
-                    }
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .liquidGlassCapsule()
                 }
-                .disabled(camera.isRecording || camera.supportedFrameRates.isEmpty)
-            }
-
-            HStack(spacing: 10) {
-                Menu {
-                    Button("Off") { camera.setStabilization("Off") }
-                    Button("Minimal") { camera.setStabilization("Minimal") }
-                    Button("Maximum") { camera.setStabilization("Maximum") }
-                } label: {
-                    settingMenuLabel("STABILISATION", value: camera.stabilization)
+            } else if feature == "Stabilisation" {
+                HStack(spacing: 8) {
+                    settingChip("OFF", selected: camera.stabilization == "Off") { camera.setStabilization("Off") }
+                    settingChip("MINIMAL", selected: camera.stabilization == "Minimal") { camera.setStabilization("Minimal") }
+                    settingChip("MAXIMUM", selected: camera.stabilization == "Maximum") { camera.setStabilization("Maximum") }
                 }
-                .disabled(camera.isRecording)
-
-                Menu {
-                    Button("1× Wide") { camera.switchLens(telephoto: false) }
-                    Button("2× Telephoto") { camera.switchLens(telephoto: true) }
-                } label: {
-                    settingMenuLabel("LENS", value: camera.isTelephoto ? "2× Tele" : "1× Wide")
+                Text(camera.stabilizationMessage).font(.system(size: 10)).foregroundStyle(.white.opacity(0.6))
+            } else if feature == "Lens" {
+                HStack(spacing: 8) {
+                    settingChip("1× WIDE", selected: !camera.isTelephoto) { camera.switchLens(telephoto: false) }
+                    settingChip("2× TELE", selected: camera.isTelephoto) { camera.switchLens(telephoto: true) }
                 }
-            }
-
-            if landscape {
-                HStack(spacing: 12) {
-                    sliderRow("ISO", value: $camera.iso, range: 25...1600, valueText: String(Int(camera.iso)), automatic: camera.isoAutomatic, autoAction: { camera.setExposureAutomatic() }) { camera.setISO($0) }
-                    sliderRow("FOCUS", value: $camera.focus, range: 0...1, valueText: String(format: "%.2f", camera.focus), automatic: camera.focusAutomatic, autoAction: { camera.setAutofocus() }) { camera.setManualFocus(Float($0)) }
-                }
-                HStack(spacing: 12) {
-                    sliderRow("SHUTTER", value: $camera.shutter, range: 1.0/1000...1.0/15, valueText: "1/\(Int(1 / max(camera.shutter, 0.001)))", automatic: camera.shutterAutomatic, autoAction: { camera.setExposureAutomatic() }) { camera.setShutter($0) }
-                    sliderRow("WHITE BAL.", value: $camera.temperature, range: 2500...8000, valueText: "\(Int(camera.temperature))K", automatic: camera.whiteBalanceAutomatic, autoAction: { camera.setWhiteBalanceAutomatic() }) { camera.setWhiteBalance($0) }
-                }
-            } else {
+            } else if feature == "Exposure" {
                 VStack(spacing: 10) {
                     sliderRow("ISO", value: $camera.iso, range: 25...1600, valueText: String(Int(camera.iso)), automatic: camera.isoAutomatic, autoAction: { camera.setExposureAutomatic() }) { camera.setISO($0) }
                     sliderRow("SHUTTER", value: $camera.shutter, range: 1.0/1000...1.0/15, valueText: "1/\(Int(1 / max(camera.shutter, 0.001)))", automatic: camera.shutterAutomatic, autoAction: { camera.setExposureAutomatic() }) { camera.setShutter($0) }
-                    sliderRow("FOCUS", value: $camera.focus, range: 0...1, valueText: String(format: "%.2f", camera.focus), automatic: camera.focusAutomatic, autoAction: { camera.setAutofocus() }) { camera.setManualFocus(Float($0)) }
-                    sliderRow("WHITE BAL.", value: $camera.temperature, range: 2500...8000, valueText: "\(Int(camera.temperature))K", automatic: camera.whiteBalanceAutomatic, autoAction: { camera.setWhiteBalanceAutomatic() }) { camera.setWhiteBalance($0) }
                 }
+            } else if feature == "Focus" {
+                sliderRow("FOCUS", value: $camera.focus, range: 0...1, valueText: String(format: "%.2f", camera.focus), automatic: camera.focusAutomatic, autoAction: { camera.setAutofocus() }) { camera.setManualFocus(Float($0)) }
+            } else if feature == "White Balance" {
+                sliderRow("WHITE BALANCE", value: $camera.temperature, range: 2500...8000, valueText: "\(Int(camera.temperature))K", automatic: camera.whiteBalanceAutomatic, autoAction: { camera.setWhiteBalanceAutomatic() }) { camera.setWhiteBalance($0) }
             }
-
-            Text(camera.stabilizationMessage.isEmpty ? camera.message : camera.stabilizationMessage)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(0.58))
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
             if camera.recordingURL != nil {
-                Button {
-                    camera.saveFinishedRecordingToPhotos()
-                } label: {
+                Button { camera.saveFinishedRecordingToPhotos() } label: {
                     Label("Save last video to Photos", systemImage: "square.and.arrow.down")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 11)
-                        .liquidGlassRounded()
+                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).padding(.vertical, 10).liquidGlassRounded()
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(16)
-        .frame(maxWidth: landscape ? 620 : .infinity)
+        .padding(14)
+        .frame(maxWidth: landscape ? 700 : .infinity)
         .liquidGlassPanel()
     }
 
