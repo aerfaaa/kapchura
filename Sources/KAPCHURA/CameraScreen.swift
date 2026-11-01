@@ -724,8 +724,6 @@ struct CameraScreen: View {
 
     private var statusBar: some View {
         HStack(spacing: 10) {
-            Spacer(minLength: 0)
-
             HStack(spacing: 7) {
                 Circle()
                     .fill(camera.isRecording ? Color.red : Color.white.opacity(0.72))
