@@ -639,24 +639,35 @@ struct CameraScreen: View {
                 ? (openGate ? 4.0 / 3.0 : 16.0 / 9.0)
                 : (openGate ? 3.0 / 4.0 : 9.0 / 16.0)
 
+            let screenRatio = geometry.size.width / max(geometry.size.height, 1)
+            let fittedWidth = screenRatio > previewRatio
+                ? geometry.size.height * previewRatio
+                : geometry.size.width
+            let fittedHeight = screenRatio > previewRatio
+                ? geometry.size.height
+                : geometry.size.width / previewRatio
+
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                // A second, enlarged and blurred preview fills the unused aspect-ratio
-                // space so the viewfinder blends into the screen instead of hard black bars.
+                // Apple Music-style live backdrop: fill the whole screen with an
+                // enlarged copy of the camera feed, then soften it behind the viewfinder.
                 CameraPreview(session: camera.session, stabilization: camera.stabilization)
-                    .aspectRatio(previewRatio, contentMode: .fill)
                     .frame(width: geometry.size.width, height: geometry.size.height)
                     .clipped()
-                    .blur(radius: 34)
-                    .scaleEffect(1.18)
-                    .overlay(Color.black.opacity(0.34))
+                    .blur(radius: 26)
+                    .scaleEffect(1.12)
+                    .overlay(Color.black.opacity(0.12))
                     .ignoresSafeArea()
 
+                // Keep the actual viewfinder crisp and correctly proportioned.
                 CameraPreview(session: camera.session, stabilization: camera.stabilization)
-                    .aspectRatio(previewRatio, contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(width: fittedWidth, height: fittedHeight)
                     .clipped()
+                    .overlay {
+                        Rectangle()
+                            .stroke(.white.opacity(0.035), lineWidth: 0.5)
+                    }
                     .animation(.spring(response: 0.38, dampingFraction: 0.88), value: camera.resolution)
 
                 if gridEnabled {
