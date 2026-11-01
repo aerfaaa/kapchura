@@ -637,7 +637,17 @@ struct CameraScreen: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                // Keep the viewfinder centred and let its visible frame follow the selected ratio.
+                // A second, enlarged and blurred preview fills the unused aspect-ratio
+                // space so the viewfinder blends into the screen instead of hard black bars.
+                CameraPreview(session: camera.session, stabilization: camera.stabilization)
+                    .aspectRatio(previewRatio, contentMode: .fill)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .clipped()
+                    .blur(radius: 34)
+                    .scaleEffect(1.18)
+                    .overlay(Color.black.opacity(0.34))
+                    .ignoresSafeArea()
+
                 CameraPreview(session: camera.session, stabilization: camera.stabilization)
                     .aspectRatio(previewRatio, contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -646,33 +656,59 @@ struct CameraScreen: View {
 
                 if gridEnabled {
                     CameraGridOverlay()
-                        .padding(.horizontal, 0)
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
 
-                VStack(spacing: 0) {
-                    statusBar
-                        .padding(.horizontal, landscape ? 24 : 20)
-                        .padding(.top, max(geometry.safeAreaInsets.top, landscape ? 8 : 12) + 6)
+                if landscape {
+                    // Landscape gets a genuinely different control layout:
+                    // status at the upper-left, shutter/settings dock on the right.
+                    HStack(alignment: .top, spacing: 0) {
+                        statusBar
+                            .padding(.leading, 18)
+                            .padding(.top, 7)
 
-                    Spacer(minLength: 12)
+                        Spacer(minLength: 12)
 
-                    if !camera.settingsCollapsed {
-                        settingsPanel(landscape: landscape)
-                            .padding(.horizontal, landscape ? 70 : 14)
-                            .padding(.bottom, 8)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        VStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            if !camera.settingsCollapsed {
+                                settingsPanel(landscape: true)
+                                    .frame(maxWidth: 300)
+                                    .padding(.bottom, 12)
+                                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                            }
+                            bottomCameraBar(landscape: true)
+                                .padding(.trailing, 12)
+                                .padding(.bottom, 10)
+                        }
+                        .frame(width: camera.settingsCollapsed ? 86 : 320)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    VStack(spacing: 0) {
+                        statusBar
+                            .padding(.horizontal, 20)
+                            .padding(.top, max(geometry.safeAreaInsets.top, 10) + 2)
 
-                    bottomCameraBar(landscape: landscape)
-                        .padding(.horizontal, landscape ? 24 : 20)
-                        .padding(.bottom, max(geometry.safeAreaInsets.bottom, 8) + (landscape ? 4 : 8))
+                        Spacer(minLength: 12)
+
+                        if !camera.settingsCollapsed {
+                            settingsPanel(landscape: false)
+                                .padding(.horizontal, 14)
+                                .padding(.bottom, 8)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
+
+                        bottomCameraBar(landscape: false)
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, max(geometry.safeAreaInsets.bottom, 8) + 8)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
-            .ignoresSafeArea(edges: landscape ? [.bottom, .leading, .trailing] : [.bottom])
+            .ignoresSafeArea()
             .background(Color.black)
         }
         .preferredColorScheme(.dark)
@@ -761,31 +797,53 @@ struct CameraScreen: View {
     }
 
     private func bottomCameraBar(landscape: Bool) -> some View {
-        HStack(alignment: .center, spacing: 0) {
-            Color.clear.frame(width: 54, height: 54)
-            Spacer(minLength: 0)
-            recordButton
-            Spacer(minLength: 0)
-
-            Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
-                    camera.settingsCollapsed.toggle()
+        Group {
+            if landscape {
+                VStack(spacing: 14) {
+                    recordButton
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
+                            camera.settingsCollapsed.toggle()
+                        }
+                    } label: {
+                        Image(systemName: camera.settingsCollapsed ? "chevron.left" : "chevron.right")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 42, height: 42)
+                            .contentShape(Circle())
+                            .liquidGlassCircle()
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(camera.settingsCollapsed ? "Show camera settings" : "Hide camera settings")
                 }
-            } label: {
-                Image(systemName: camera.settingsCollapsed ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
-                    .liquidGlassCircle()
+                .padding(.vertical, 14)
+            } else {
+                HStack(alignment: .center, spacing: 0) {
+                    Color.clear.frame(width: 54, height: 54)
+                    Spacer(minLength: 0)
+                    recordButton
+                    Spacer(minLength: 0)
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) {
+                            camera.settingsCollapsed.toggle()
+                        }
+                    } label: {
+                        Image(systemName: camera.settingsCollapsed ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Circle())
+                            .liquidGlassCircle()
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(camera.settingsCollapsed ? "Show camera settings" : "Hide camera settings")
+                }
+                .padding(.horizontal, 16)
+                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(camera.settingsCollapsed ? "Show camera settings" : "Hide camera settings")
         }
-        .padding(.horizontal, landscape ? 18 : 16)
-        .frame(maxWidth: landscape ? 440 : .infinity)
-        .frame(maxWidth: .infinity)
     }
 
     private func settingsPanel(landscape: Bool) -> some View {
