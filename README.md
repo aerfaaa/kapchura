@@ -1,35 +1,44 @@
 # KAPCHURA
 
-An open-source iOS camera experiment focused on computational imaging and camcorder-style capture.
+KAPCHURA is an independent, free iOS camera application. This repository is being rebuilt as a native SwiftUI + AVFoundation camera, with a focus on manual capture controls and a future computational-video pipeline.
 
-## First milestone included
+## Current foundation
 
-- AVFoundation live camera preview.
-- Runtime camera discovery and basic 1× / 2× zoom controls.
-- Manual ISO, shutter, focus and white-balance controls.
-- RAW still-photo capability detection using `AVCapturePhotoOutput`.
-- Video recording using `AVCaptureMovieFileOutput`.
-- Export of the last recording using the iOS share sheet.
-- GitHub Actions build workflow.
+- Native SwiftUI camera interface.
+- AVFoundation live preview and runtime camera discovery.
+- Photo capture and video recording.
+- ISO, shutter, manual focus, white-balance and zoom controls.
+- Runtime detection of RAW still-photo support.
+- Share-sheet export of the latest capture.
+- Portrait-first camera interface.
+- iPhone XS is the initial hardware validation target.
 
-## Important technical boundary
+## Important limitations
 
-This starter does **not** claim to record RAW video or produce a genuine Log transform yet. Apple's `AVCapturePhotoOutput` exposes RAW still-photo capture; that does not by itself provide a continuous RAW video stream. KAPCHURA detects RAW still support separately so we do not mislabel processed video as RAW.
-
-The first milestone uses AVFoundation's normal video recording output. The next milestone is to replace/extend this with a custom `AVCaptureVideoDataOutput` + Metal/VideoToolbox processing pipeline, after validating what the target device actually exposes.
+This foundation does not yet implement RAW video, Apple Log recording, LUT processing, ProRes, or a custom Metal colour pipeline. RAW still-photo support is detected separately; it must not be confused with RAW video capture. Available lenses, formats, frame rates and codecs must be verified on each physical device.
 
 ## Build
 
-1. Install Xcode 15 or later on macOS.
-2. Install XcodeGen: `brew install xcodegen`
-3. Run `xcodegen generate` in the project directory.
-4. Open `KAPCHURA.xcodeproj`, select a physical iPhone, and run.
+Requires macOS with Xcode 15.4 or later and XcodeGen.
 
-The iOS deployment target is 16.0. Test on a physical device; the simulator does not provide equivalent camera hardware.
+```sh
+brew install xcodegen
+xcodegen generate
+xcodebuild -project KAPCHURA.xcodeproj -scheme KAPCHURA -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+```
 
-## Reference device
+Open the generated project in Xcode, select a physical iPhone, configure signing, and run. The GitHub Actions workflow performs an unsigned compile check; it does not produce a signed, installable IPA.
 
-Initial testing target: iPhone XS. All supported lenses, frame rates, pixel formats and RAW still capabilities must be detected at runtime.
+## Project direction
+
+The next engineering milestones are:
+1. Validate photo/video capture and manual controls on iPhone XS.
+2. Add a dedicated frame-processing pipeline using AVCaptureVideoDataOutput and Metal.
+3. Add verified log-style recording profiles and 3D LUT preview/output.
+4. Investigate supported high-bitrate codecs, frame rates and open-gate capture per device.
+5. Add optional RAW/DNG still capture and a proper media library.
+
+KAPCHURA is independently implemented and does not depend on LogCam's code, subscription, or licensing.
 
 ## License
 
