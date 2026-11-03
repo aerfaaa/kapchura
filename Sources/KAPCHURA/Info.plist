@@ -3,8 +3,16 @@
 <plist version="1.0">
 <dict>
     <key>NSCameraUsageDescription</key>
-    <string>KAPCHURA uses the camera to capture video.</string>
+    <string>KAPCHURA needs camera access to capture photos and video.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>KAPCHURA uses the microphone to record audio with video.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>KAPCHURA can save captured media to your photo library.</string>
+    <key>UIUserInterfaceStyle</key>
+    <string>Dark</string>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
 </dict>
 </plist>
