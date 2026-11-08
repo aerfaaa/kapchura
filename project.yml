@@ -18,6 +18,11 @@ targets:
         PRODUCT_NAME: KAPCHURA
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
-        INFOPLIST_KEY_CFBundleDisplayName: KAPCHURA
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: KAPCHURA
+        INFOPLIST_KEY_NSCameraUsageDescription: "KAPCHURA needs camera access to capture photos and video."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "KAPCHURA uses the microphone to record audio with video."
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "KAPCHURA can save captured media to your photo library."
+        INFOPLIST_KEY_UIUserInterfaceStyle: Dark
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         CODE_SIGN_STYLE: Automatic
