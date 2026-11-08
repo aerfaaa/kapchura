@@ -1,10 +1,13 @@
 import AVFoundation
 import Combine
+import CoreMedia
+import CoreVideo
 import Foundation
 
 final class CameraEngine: NSObject, ObservableObject {
     enum CaptureMode: String, CaseIterable {
         case photo = "PHOTO"
+        case rawPhoto = "RAW"
         case video = "VIDEO"
     }
 
@@ -15,7 +18,11 @@ final class CameraEngine: NSObject, ObservableObject {
     @Published private(set) var status = "REQUESTING CAMERA ACCESS"
     @Published private(set) var latestMediaURL: URL?
     @Published private(set) var supportedFrameRates: [Double] = []
+    @Published private(set) var supportedCameraFormats: [String] = []
+    @Published private(set) var supportedVideoCodecs: [String] = []
     @Published private(set) var rawPhotoSupported = false
+    @Published private(set) var activeFrameSummary = "WAITING FOR VIDEO FRAMES"
+    @Published private(set) var activePixelFormat = "—"
     @Published var mode: CaptureMode = .video
 
     @Published var iso: Double = 100
@@ -25,10 +32,13 @@ final class CameraEngine: NSObject, ObservableObject {
     @Published var zoom: Double = 1
 
     private let sessionQueue = DispatchQueue(label: "com.aerfaaa.kapchura.capture")
+    private let videoQueue = DispatchQueue(label: "com.aerfaaa.kapchura.video-frames")
     private let movieOutput = AVCaptureMovieFileOutput()
     private let photoOutput = AVCapturePhotoOutput()
+    private let videoDataOutput = AVCaptureVideoDataOutput()
     private var activeDevice: AVCaptureDevice?
     private var photoDelegate: PhotoCaptureDelegate?
+    private var lastFrameSignature = ""
 
     override init() {
         super.init()
@@ -58,12 +68,25 @@ final class CameraEngine: NSObject, ObservableObject {
             self.session.sessionPreset = .high
 
             let discovery = AVCaptureDevice.DiscoverySession(
-                deviceTypes: [.builtInWideAngleCamera, .builtInTelephotoCamera, .builtInUltraWideCamera],
+                deviceTypes: [
+                    .builtInTripleCamera,
+                    .builtInDualWideCamera,
+                    .builtInDualCamera,
+                    .builtInWideAngleCamera,
+                    .builtInTelephotoCamera,
+                    .builtInUltraWideCamera
+                ],
                 mediaType: .video,
                 position: .back
             )
-            guard let device = discovery.devices.first(where: { $0.deviceType == .builtInWideAngleCamera })
-                    ?? discovery.devices.first,
+
+            guard let device = discovery.devices.first(where: {
+                $0.deviceType == .builtInTripleCamera
+                    || $0.deviceType == .builtInDualWideCamera
+                    || $0.deviceType == .builtInDualCamera
+            }) ?? discovery.devices.first(where: {
+                $0.deviceType == .builtInWideAngleCamera
+            }) ?? discovery.devices.first,
                   let videoInput = try? AVCaptureDeviceInput(device: device),
                   self.session.canAddInput(videoInput) else {
                 self.session.commitConfiguration()
@@ -87,22 +110,58 @@ final class CameraEngine: NSObject, ObservableObject {
                 self.session.addOutput(self.movieOutput)
             }
 
-            let rawAvailable = !self.photoOutput.availableRawPhotoPixelFormatTypes.isEmpty
+            self.videoDataOutput.alwaysDiscardsLateVideoFrames = true
+            self.videoDataOutput.videoSettings = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            ]
+            self.videoDataOutput.setSampleBufferDelegate(self, queue: self.videoQueue)
+            if self.session.canAddOutput(self.videoDataOutput) {
+                self.session.addOutput(self.videoDataOutput)
+            } else {
+                self.publishStatus("VIDEO FRAME OUTPUT UNAVAILABLE")
+            }
+
+            let rawTypes = self.photoOutput.availableRawPhotoPixelFormatTypes
             let rates = Set(device.formats.flatMap { format in
                 format.videoSupportedFrameRateRanges.map { $0.maxFrameRate }
             }).sorted()
+            let formats = device.formats.enumerated().map { index, format in
+                let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                let subtype = CMFormatDescriptionGetMediaSubType(format.formatDescription)
+                let frameRates = format.videoSupportedFrameRateRanges
+                    .map { "\(Int($0.minFrameRate))–\(Int($0.maxFrameRate)) fps" }
+                    .joined(separator: ", ")
+                let hdr = format.isVideoHDRSupported ? "HDR" : "SDR"
+                return "#\(index + 1) · \(dimensions.width)×\(dimensions.height) · \(Self.fourCharacterCode(subtype)) · \(frameRates) · \(hdr)"
+            }
+
+            let codecs = self.movieOutput.availableVideoCodecTypes.map(\.rawValue).sorted()
 
             self.session.commitConfiguration()
             self.session.startRunning()
 
             DispatchQueue.main.async {
-                self.rawPhotoSupported = rawAvailable
+                self.rawPhotoSupported = !rawTypes.isEmpty
                 self.supportedFrameRates = rates
+                self.supportedCameraFormats = formats
+                self.supportedVideoCodecs = codecs
                 self.iso = Double(device.iso)
                 self.isReady = true
-                self.status = rawAvailable ? "CAMERA READY · RAW PHOTO AVAILABLE" : "CAMERA READY"
+                self.status = rawTypes.isEmpty
+                    ? "CAMERA READY"
+                    : "CAMERA READY · RAW PHOTO AVAILABLE"
             }
         }
+    }
+
+    private static func fourCharacterCode(_ code: FourCharCode) -> String {
+        let bytes: [UInt8] = [
+            UInt8((code >> 24) & 0xff),
+            UInt8((code >> 16) & 0xff),
+            UInt8((code >> 8) & 0xff),
+            UInt8(code & 0xff)
+        ]
+        return String(bytes: bytes, encoding: .macOSRoman) ?? String(code)
     }
 
     func setZoom(_ value: Double) {
@@ -186,24 +245,41 @@ final class CameraEngine: NSObject, ObservableObject {
 
     func capture() {
         guard isReady else { return }
-        if mode == .photo {
-            let settings = AVCapturePhotoSettings()
-            let delegate = PhotoCaptureDelegate { [weak self] url, error in
-                DispatchQueue.main.async {
-                    self?.photoDelegate = nil
-                    if let url {
-                        self?.latestMediaURL = url
-                        self?.status = "PHOTO CAPTURED"
-                    } else {
-                        self?.status = error ?? "PHOTO CAPTURE FAILED"
-                    }
+
+        if mode == .video {
+            toggleRecording()
+            return
+        }
+
+        let settings: AVCapturePhotoSettings
+        let isRaw = mode == .rawPhoto
+        if isRaw {
+            let rawType = photoOutput.availableRawPhotoPixelFormatTypes.first(where: {
+                !AVCapturePhotoOutput.isAppleProRAWPixelFormat($0)
+            }) ?? photoOutput.availableRawPhotoPixelFormatTypes.first
+
+            guard let rawType else {
+                publishStatus("RAW PHOTO NOT AVAILABLE ON THIS CAMERA")
+                return
+            }
+            settings = AVCapturePhotoSettings(rawPixelFormatType: rawType, processedFormat: nil)
+        } else {
+            settings = AVCapturePhotoSettings()
+        }
+
+        let delegate = PhotoCaptureDelegate(isRaw: isRaw) { [weak self] url, error in
+            DispatchQueue.main.async {
+                self?.photoDelegate = nil
+                if let url {
+                    self?.latestMediaURL = url
+                    self?.status = isRaw ? "RAW PHOTO CAPTURED" : "PHOTO CAPTURED"
+                } else {
+                    self?.status = error ?? "PHOTO CAPTURE FAILED"
                 }
             }
-            photoDelegate = delegate
-            photoOutput.capturePhoto(with: settings, delegate: delegate)
-        } else {
-            toggleRecording()
         }
+        photoDelegate = delegate
+        photoOutput.capturePhoto(with: settings, delegate: delegate)
     }
 
     private func toggleRecording() {
@@ -217,6 +293,26 @@ final class CameraEngine: NSObject, ObservableObject {
         DispatchQueue.main.async {
             self.isRecording = true
             self.status = "RECORDING"
+        }
+    }
+}
+
+extension CameraEngine: AVCaptureVideoDataOutputSampleBufferDelegate {
+    func captureOutput(_ output: AVCaptureOutput,
+                       didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
+        let formatName = Self.fourCharacterCode(pixelFormat)
+        let signature = "\(width)x\(height) · \(formatName)"
+        guard signature != lastFrameSignature else { return }
+        lastFrameSignature = signature
+
+        DispatchQueue.main.async {
+            self.activeFrameSummary = signature
+            self.activePixelFormat = formatName
         }
     }
 }
@@ -239,9 +335,11 @@ extension CameraEngine: AVCaptureFileOutputRecordingDelegate {
 }
 
 private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
+    private let isRaw: Bool
     private let completion: (URL?, String?) -> Void
 
-    init(completion: @escaping (URL?, String?) -> Void) {
+    init(isRaw: Bool, completion: @escaping (URL?, String?) -> Void) {
+        self.isRaw = isRaw
         self.completion = completion
     }
 
@@ -256,8 +354,9 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
             completion(nil, "PHOTO DATA UNAVAILABLE")
             return
         }
+        let fileExtension = isRaw ? "dng" : "jpg"
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("KAPCHURA-\(UUID().uuidString).jpg")
+            .appendingPathComponent("KAPCHURA-\(UUID().uuidString).\(fileExtension)")
         do {
             try data.write(to: url, options: .atomic)
             completion(url, nil)

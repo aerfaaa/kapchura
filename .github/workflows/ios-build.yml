@@ -1,13 +1,14 @@
-
 name: "iOS Build"
 
-"on":
+on:
   push:
     branches:
       - main
+      - feature/logcam-pipeline-foundation
   pull_request:
     branches:
       - main
+      - rebuild/kapchura-native-camera
   workflow_dispatch:
 
 jobs:
@@ -23,7 +24,7 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Build for iOS
+      - name: Build unsigned iOS app
         run: |
           xcodebuild \
             -project KAPCHURA.xcodeproj \
@@ -34,10 +35,17 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      - name: Upload unsigned app bundle
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p ipa/Payload
+          cp -R build/Build/Products/Debug-iphoneos/KAPCHURA.app ipa/Payload/KAPCHURA.app
+          cd ipa
+          /usr/bin/zip -qry ../KAPCHURA-unsigned.ipa Payload
+
+      - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: KAPCHURA-unsigned-app
-          path: build/Build/Products/Debug-iphoneos/KAPCHURA.app
+          name: KAPCHURA-unsigned-IPA
+          path: KAPCHURA-unsigned.ipa
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
