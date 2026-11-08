@@ -81,6 +81,10 @@ final class CameraEngine: NSObject, ObservableObject {
             )
 
             guard let device = discovery.devices.first(where: {
+                $0.deviceType == .builtInTripleCamera
+                    || $0.deviceType == .builtInDualWideCamera
+                    || $0.deviceType == .builtInDualCamera
+            }) ?? discovery.devices.first(where: {
                 $0.deviceType == .builtInWideAngleCamera
             }) ?? discovery.devices.first,
                   let videoInput = try? AVCaptureDeviceInput(device: device),
