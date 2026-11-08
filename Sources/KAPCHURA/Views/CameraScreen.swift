@@ -15,11 +15,15 @@ struct CameraScreen: View {
                         .frame(height: geometry.size.height * 0.48)
                         .clipped()
                         .overlay(alignment: .bottomLeading) {
-                            Text(camera.status)
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                .tracking(1)
-                                .foregroundStyle(.white.opacity(0.8))
-                                .padding(12)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(camera.status)
+                                Text("FRAME · \(camera.activeFrameSummary)")
+                                    .foregroundStyle(.white.opacity(0.65))
+                            }
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .tracking(0.7)
+                            .foregroundStyle(.white.opacity(0.85))
+                            .padding(12)
                         }
                     zoomControl
                     if showSettings {
@@ -65,10 +69,10 @@ struct CameraScreen: View {
             zoomButton("1×", value: 1)
             zoomButton("2×", value: 2)
             Spacer()
-            Text(camera.rawPhotoSupported ? "RAW CAPABLE" : "STANDARD PHOTO")
+            Text(camera.rawPhotoSupported ? "RAW PHOTO READY" : "STANDARD PHOTO")
+                .foregroundStyle(camera.rawPhotoSupported ? .green : .white.opacity(0.45))
                 .font(.system(size: 8, weight: .medium, design: .monospaced))
                 .tracking(0.8)
-                .foregroundStyle(.white.opacity(0.45))
         }
         .padding(.vertical, 14)
     }
@@ -143,7 +147,7 @@ struct CameraScreen: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 150)
+                .frame(width: 180)
                 Spacer()
                 if let url = camera.latestMediaURL {
                     ShareLink(item: url) {
